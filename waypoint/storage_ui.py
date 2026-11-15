@@ -6,6 +6,7 @@ For NAS logger brukeren inn med brukernavn og passord og blar seg frem til mappe
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 
@@ -162,7 +163,8 @@ class StorageDialog(Adw.Dialog):
         page.add(btn_group)
         self._show()
         self._show_pw()
-        threading.Thread(target=self._discover, daemon=True).start()
+        if not os.environ.get("WAYPOINT_SCREENSHOT"):  # skjermbilder skal ikke vise maskiner i eierens nettverk
+            threading.Thread(target=self._discover, daemon=True).start()
 
     # ------------------------------------------------------------ visning
 

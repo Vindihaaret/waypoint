@@ -1,18 +1,18 @@
-"""Kommandolinje. «waypoint» uten argumenter starter programmet.
+"""Command line. "waypoint" without arguments opens the window.
 
-  waypoint                    åpner vinduet
-  waypoint <fil>              åpner vinduet med en sikkerhetskopi klar til gjenoppretting
-  waypoint preferences        åpner innstillingene
-  waypoint browse             henter enkeltfiler fra et tidligere tidspunkt
-  waypoint check              kontrollerer sikkerhetskopiene på lagringsstedet
-  waypoint snapshots          viser tidspunktene på lagringsstedene
-  waypoint list [--job ID]    viser hva som ville blitt tatt med (for en oppgave)
-  waypoint jobs               viser sikkerhetskopioppgavene
-  waypoint backup [--job ID]  tar en sikkerhetskopi nå (én oppgave, eller alle)
-  waypoint export [fil]       eksporterer oppsettet til én fil (krypteres med passordet i nøkkelringen)
-  waypoint inspect <fil>      viser innholdet i en sikkerhetskopi og hva som mangler på denne maskinen
-  waypoint auto [--now] [--job ID]   automatisk sikkerhetskopi (kjøres av systemd-timeren)
-  waypoint tray               ikonet i statusfeltet
+  waypoint                    open the window
+  waypoint <file>             open the window with an exported file ready to restore
+  waypoint preferences        open the settings
+  waypoint browse             recover single files from an earlier point in time
+  waypoint check              verify the backups on every storage location
+  waypoint snapshots          list the points in time on each storage location
+  waypoint list [--job ID]    show what would be backed up (for a task)
+  waypoint jobs               list the backup tasks
+  waypoint backup [--job ID]  back up now (one task, or all)
+  waypoint export [file]      export your setup to a single file (encrypted with the password in the keyring)
+  waypoint inspect <file>     show what an exported file contains and what is missing on this computer
+  waypoint auto [--now] [--job ID]   automatic backups (run by the systemd timer)
+  waypoint tray               the system tray icon
 """
 
 import sys

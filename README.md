@@ -1,105 +1,114 @@
-# Waypoint
+# Waypoint – backups for your Linux setup and files
 
-Sikkerhetskopi av Linux-oppsettet og filene dine, som Time Machine: innstillinger, utvidelser, bakgrunnsbilde,
-programmer, dokumenter og bilder. Gå tilbake til et hvilket som helst tidspunkt, hent en enkelt fil, eller legg alt
-tilbake etter en ny installasjon.
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/start-dark.png">
+    <img alt="Waypoint showing two backup tasks, one of them running" src="docs/screenshots/start-light.png" width="480">
+  </picture>
+</p>
 
-## Hva blir tatt med
+Waypoint is a backup application for Linux with GNOME. It keeps your **settings, extensions, apps and personal
+files** safe – automatically, encrypted and storing only what has changed – and lets you go back to any point in
+time, recover a single file, or **move your whole setup to a new installation** without setting everything up again.
 
-| Del | Hvordan den gjenopprettes |
+* **Backup tasks**: choose what to back up (everything, personal files only, setup and settings only, or your own
+  selection), where (an external disk, a USB drive or a NAS) and how often. For example: your files to an external
+  disk every hour and your settings to the NAS every day.
+* **Incremental and encrypted** with [restic](https://restic.net): the first backup copies everything, after that
+  only new and changed files are stored. Everything is encrypted with AES-256 before it leaves the computer.
+* **Like Time Machine**: backups run in the background, even when Waypoint is closed. Old points in time are thinned
+  out (all from the last 24 hours, one per day for the past month, one per week before that), and the oldest are
+  deleted when the disk is full. Backups are verified regularly.
+* **NAS without typing paths**: log in with user name and password (SMB or SFTP) and browse to the folder. Waypoint
+  connects to the NAS by itself when a backup is due.
+* **Restore everything** on a new installation: GNOME settings, extensions (fetched again from extensions.gnome.org
+  if GNOME has been updated), wallpaper, system packages and repositories, Flatpak apps and your files. Anything that
+  is replaced is moved aside, so nothing is lost.
+* **Recover single files** from an earlier point in time.
+* **Export your setup** to a single encrypted file to move it to another computer.
+* **System tray icon**, progress in the window and a notification with “Show progress” when a backup starts.
+* Native **GTK 4 / libadwaita** interface that follows the light/dark theme. English, Norwegian, German, Spanish and
+  French.
+
+*From Norway with Love ❤️*
+
+Made by **Jan Ivar Sørensen** using [Claude Code](https://claude.com/claude-code), Anthropic's AI coding assistant.
+
+## Screenshots
+
+| Light | Dark |
 |---|---|
-| GNOME-innstillinger (dconf): snarveier, tema, dock, mus, tastatur, programmapper | `dconf load`, i tre grupper du kan velge hver for seg |
-| Bakgrunnsbilde og låseskjerm | Settes på nytt |
-| GNOME-utvidelser | Fra kopien hvis de passer GNOME-versjonen, ellers ny versjon fra extensions.gnome.org |
-| Systempakker du selv har installert (zypper, dnf, apt, pacman) og pakkekilder | Installeres på nytt med administratorpassord (pkexec) |
-| Flatpak-apper og Flatpak-kilder | `flatpak install` |
-| Personlige mapper: Dokumenter, Bilder, Musikk, Videoer, Nedlastinger og andre mapper i hjemmemappen | Legges tilbake |
-| Innstillingsfiler: `~/.config`, skrifttyper, temaer, `.bashrc`, `.gitconfig`, `~/.local/bin`, Flatpak-data | Legges tilbake |
-| Nøkler og passord (SSH, GPG, nøkkelring), nettleserprofiler | Alltid kryptert |
+| ![Start page](docs/screenshots/start-light.png) | ![Start page](docs/screenshots/start-dark.png) |
+| ![Editing a backup task](docs/screenshots/task-light.png) | ![Editing a backup task](docs/screenshots/task-dark.png) |
+| ![Logging in to a NAS](docs/screenshots/storage-light.png) | ![Logging in to a NAS](docs/screenshots/storage-dark.png) |
+| ![Settings](docs/screenshots/settings-light.png) | ![Settings](docs/screenshots/settings-dark.png) |
 
-Mellomlager, låsefiler og det du legger inn under Unntak tas ikke med. Det som erstattes ved gjenoppretting,
-flyttes til `~/.local/share/waypoint/replaced/<tidspunkt>/`, så ingenting går tapt.
+## What is backed up
 
-## Sikkerhetskopioppgaver
+| Part | How it is restored |
+|---|---|
+| GNOME settings (dconf): shortcuts, theme, dock, mouse, keyboard, app folders | `dconf load`, in three groups you can choose separately |
+| Wallpaper and lock screen | Set again |
+| GNOME extensions | From the backup if they match the GNOME version, otherwise fetched from extensions.gnome.org |
+| System packages you installed yourself (zypper, dnf, apt, pacman) and repositories | Installed again with the administrator password (pkexec) |
+| Flatpak apps and remotes | `flatpak install` |
+| Personal folders: Documents, Pictures, Music, Videos, Downloads and other folders in your home folder | Put back |
+| Configuration: `~/.config`, fonts, themes, `.bashrc`, `.gitconfig`, `~/.local/bin`, Flatpak app data | Put back |
+| Keys and passwords (SSH, GPG, keyring), browser profiles | Optional, always encrypted |
 
-Du lager én eller flere oppgaver på forsiden. Hver oppgave har et navn, et innhold (alt, bare personlige filer, bare
-oppsett og innstillinger – eller egne valg), et lagringssted og hvor ofte den kjøres (eller bare manuelt). Eksempel:
-«Filer» til en ekstern disk hver time og «Innstillinger» til NAS-en hver dag. Oppgaver kan redigeres og slettes;
-kopiene som allerede er tatt, blir liggende. Mens en kopi kjører, vises fremdriften i oppgavens rad og i en
-statuslinje nederst i vinduet, og statusfeltet kan varsle når en kopi starter i bakgrunnen («Vis fremdrift»).
+Caches, lock files and anything you add under *Exclusions* are skipped. Files that are replaced during a restore are
+moved to `~/.local/share/waypoint/replaced/<time>/`.
 
-## Lagring: restic
-
-Sikkerhetskopiene lagres i et [restic](https://restic.net)-lager. Første gang kopieres alt, deretter bare det som er
-nytt eller endret (deduplisering). Hvert tidspunkt er likevel en hel kopi. Alt krypteres med AES-256 og passordet
-ditt, som ligger i GNOME-nøkkelringen.
-
-Lagringssteder: en mappe på denne maskinen, en USB-disk eller en NAS i nettverket. For en NAS logger du inn med
-brukernavn og passord (SMB eller SFTP) og blar deg frem til mappen; Waypoint finner også NAS-er som annonserer seg
-på nettverket. Tilkoblingen går via GNOMEs GVfs (som Filer), og passordet lagres i nøkkelringen, så de automatiske
-kopiene kan koble til NAS-en selv. Lageret legges i mappen `Waypoint` på stedet du velger.
-
-restic installeres fra pakkesystemet ved behov (`sudo zypper install restic`). Kopiene kan også leses uten Waypoint:
-`restic -r <lager> snapshots` og `restic -r <lager> restore latest --target /tmp/x`.
-
-## Automatisk, som Time Machine
-
-En systemd-timer for brukeren (`waypoint-auto.timer`) kjører `waypoint auto` hvert 15. minutt. En ny kopi tas når
-det har gått en time, et døgn eller en uke, og lagringsstedet er tilgjengelig. Regler: ikke på batteri, ikke på målt
-nettverk (for NAS), og varsel når det er for lenge siden siste kopi. Gamle tidspunkter tynnes ut: alt fra siste
-døgn, ett per dag den siste måneden og ett per uke før det; blir disken full, slettes de eldste. Kopiene kontrolleres
-jevnlig (`restic check --read-data-subset 2%`).
-
-Status ligger i `~/.local/state/waypoint/status.json`. Ikonet i statusfeltet (`waypoint tray`) viser siste og neste
-kopi, blå prikk mens en kopi tas, gul når den venter og rød ved feil.
-
-## Eksport til én fil
-
-«Eksporter oppsett» lagrer oppsettet i én `tar.gz`-fil for å flytte det til en annen maskin. Nøkler og passord
-krypteres alltid med gpg (AES-256), og hele filen kan krypteres (standard): `gpg -d fil.tar.gz.gpg | tar xz`.
-Sikkerhetskopier fra Flytt (det gamle navnet) kan fortsatt gjenopprettes.
-
-## Oppstart og oppdateringer
-
-Innstillinger → Generelt: vis ikon i statusfeltet, start ved innlogging, se etter nye versjoner (én gang i døgnet,
-fra GitHub) og eventuelt installer dem automatisk. Waypoint ligger i hjemmemappen, så oppdateringen trenger ikke
-administratorpassord. Automatiske sikkerhetskopier går uansett, også når Waypoint ikke er startet.
-
-## Språk og utseende
-
-Norsk, engelsk, tysk, spansk og fransk; følger systemspråket eller velges i Innstillinger. Følger systemets lyse
-eller mørke tema. Nye tekster: legg dem i `tools/translations.py` og kjør `python3 tools/make_locales.py`.
-
-## Installere
+## Install
 
 ```sh
-./install.sh      # til ~/.local, uten sudo
-./uninstall.sh
+sudo zypper install restic        # Fedora: sudo dnf install restic, Ubuntu: sudo apt install restic
+git clone https://github.com/Vindihaaret/waypoint
+cd waypoint
+./install.sh                      # installs to ~/.local, no sudo needed
 ```
 
-Trenger Python 3.10+, PyGObject, GTK 4.12+, libadwaita 1.6+ og restic (gpg for eksportfiler).
+Requires Python 3.10+, PyGObject, GTK 4.12+, libadwaita 1.6+, restic and GVfs (for NAS). gpg is used for exported
+files. Later versions can be installed from the app (*Settings → General → Updates*). To remove: `./uninstall.sh`
+(your backups and settings are kept).
 
-## Kommandolinje
+## How it works
+
+* **Storage**: a restic repository in the folder `Waypoint` at the location you choose. A NAS is connected through
+  GNOME's GVfs (like the Files app); the password is stored in the GNOME keyring so the background backups can
+  reconnect. Backups can also be read without Waypoint: `restic -r <folder>/Waypoint snapshots`.
+* **Automatic backups**: a systemd user timer (`waypoint-auto.timer`) runs `waypoint auto` every 15 minutes. Each
+  automatic task runs when it is due and the storage is available. Rules: not on battery, not on metered networks
+  (for a NAS), and a notification when it has been too long since the last backup.
+* **Encryption**: all backup tasks share one password, stored in the keyring. Without it nobody can open the
+  backups – not even you, so write it down somewhere safe.
+* **Exported files** are `tar.gz` archives; keys and passwords are always encrypted with gpg (AES-256), and the
+  whole file can be encrypted too: `gpg -d file.tar.gz.gpg | tar xz`.
+
+## Command line
 
 ```sh
-waypoint                    # åpner vinduet
-waypoint backup [--job ID]  # tar en sikkerhetskopi nå (én oppgave, eller alle)
-waypoint jobs               # viser oppgavene
-waypoint browse             # henter enkeltfiler fra et tidligere tidspunkt
-waypoint snapshots          # viser tidspunktene på lagringsstedet
-waypoint check              # kontrollerer sikkerhetskopiene
-waypoint export [fil]       # eksporterer oppsettet til én fil
-waypoint inspect <fil>      # viser innholdet i en eksportert fil
-waypoint list               # viser hva som ville blitt tatt med
-waypoint preferences        # åpner innstillingene
-waypoint auto [--now]       # automatisk sikkerhetskopi (kjøres av timeren)
-waypoint tray               # ikonet i statusfeltet
+waypoint                     # open the window
+waypoint backup [--job ID]   # back up now (one task, or all)
+waypoint jobs                # list the backup tasks
+waypoint snapshots           # list points in time on each storage location
+waypoint browse              # recover single files
+waypoint check               # verify the backups
+waypoint export [file]       # export your setup to a single file
+waypoint inspect <file>      # show what an exported file contains
+waypoint preferences         # open the settings
 ```
 
-## Utvikling
+## Development
 
 ```sh
-python3 -m unittest discover -s tests       # restic-testen hoppes over hvis restic mangler
-python3 -m waypoint                         # kjør fra kildekoden
-WAYPOINT_SCREENSHOT=ut.png WAYPOINT_PAGE=backup WAYPOINT_SCREENSHOT_DELAY=4 python3 -m waypoint
+python3 -m unittest discover -s tests     # the restic tests are skipped if restic is missing
+python3 -m waypoint                       # run from the source folder
 ```
+
+New user interface text goes into `tools/translations.py`; run `python3 tools/make_locales.py` to generate the
+language files (the tests check that nothing is missing).
+
+## License
+
+GPL-3.0-or-later – see [LICENSE](LICENSE).

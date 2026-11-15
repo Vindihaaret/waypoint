@@ -1348,6 +1348,9 @@ class App(Adw.Application):
                 win.begin_browse()
             elif target == "storage":
                 win.show_storage()
+            elif target.startswith("storage:"):
+                job = settings.job(target[8:])
+                win.show_storage(current=job and job.get("storage"))
             elif target == "job-new":
                 win.edit_job(None)
             elif target == "about":
