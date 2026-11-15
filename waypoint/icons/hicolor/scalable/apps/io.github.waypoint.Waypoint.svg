@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3b3f4c"/><stop offset="1" stop-color="#16171c"/></linearGradient>
+    <linearGradient id="pin" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#b9bfca"/></linearGradient>
+    <linearGradient id="air" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#4fe3ff"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)"/>
+  <rect x="9" y="9" width="110" height="110" rx="27" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width="2"/>
+  <!-- route travelled -->
+  <path d="M22 98 C34 96 30 82 44 84 C54 85 56 96 62 99" fill="none" stroke="url(#air)" stroke-width="4.5" stroke-linecap="round" stroke-dasharray="1 8.5"/>
+  <circle cx="22" cy="98" r="4" fill="#4fe3ff"/>
+  <!-- shadow -->
+  <ellipse cx="66" cy="101" rx="14" ry="4" fill="#000" opacity=".4"/>
+  <!-- pin -->
+  <path d="M66 100C58 88 41 74 41 53a25 25 0 0 1 50 0c0 21-17 35-25 47z" fill="#000" opacity=".3" transform="translate(0 3)"/>
+  <path d="M66 100C58 88 41 74 41 53a25 25 0 0 1 50 0c0 21-17 35-25 47z" fill="url(#pin)"/>
+  <circle cx="66" cy="53" r="11" fill="#16171c"/>
+  <circle cx="66" cy="53" r="6.5" fill="url(#air)"/>
+</svg>

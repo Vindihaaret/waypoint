@@ -1,0 +1,36 @@
+[Desktop Entry]
+Type=Application
+Name=Waypoint
+GenericName=Backup of your setup
+GenericName[nb]=Sikkerhetskopi av oppsettet
+GenericName[de]=Sicherung Ihrer Einrichtung
+GenericName[es]=Copia de tu configuración
+GenericName[fr]=Sauvegarde de votre configuration
+Comment=Take your settings, extensions and apps to a new installation
+Comment[nb]=Ta med deg innstillinger, utvidelser og programmer til en ny installasjon
+Comment[de]=Einstellungen, Erweiterungen und Programme zu einer neuen Installation mitnehmen
+Comment[es]=Lleva tus ajustes, extensiones y aplicaciones a una instalación nueva
+Comment[fr]=Emportez vos paramètres, extensions et applications vers une nouvelle installation
+Exec=waypoint %f
+Icon=io.github.waypoint.Waypoint
+Terminal=false
+Categories=GTK;GNOME;Utility;Settings;
+Keywords=backup;restore;migrate;reinstall;encryption;sikkerhetskopi;gjenopprett;waypoint;oppsett;Sicherung;copia;sauvegarde;
+StartupNotify=true
+Actions=backup-now;preferences;
+
+[Desktop Action backup-now]
+Name=Back up now
+Name[nb]=Ta sikkerhetskopi nå
+Name[de]=Jetzt sichern
+Name[es]=Copiar ahora
+Name[fr]=Sauvegarder maintenant
+Exec=waypoint auto --now
+
+[Desktop Action preferences]
+Name=Settings
+Name[nb]=Innstillinger
+Name[de]=Einstellungen
+Name[es]=Ajustes
+Name[fr]=Paramètres
+Exec=waypoint preferences

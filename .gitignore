@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# Notater for Claude og kodesjekker holdes lokalt
+CLAUDE.md
+REVIEW.md

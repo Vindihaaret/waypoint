@@ -1,0 +1,112 @@
+/* Forsiden */
+.hero-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+.hero-text {
+  font-size: 13px;
+}
+.action-card {
+  padding: 11px 13px;
+  border-radius: 16px;
+}
+.action-title {
+  font-size: 14.5px;
+  font-weight: 700;
+}
+.action-text {
+  font-size: 12.5px;
+}
+.action-icon {
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 9px;
+  color: white;
+}
+.action-icon.backup {
+  background: linear-gradient(135deg, #4fe3ff, #3b82f6);
+}
+.action-icon.restore {
+  background: linear-gradient(135deg, #7ef0b8, #14a86b);
+}
+.action-icon.browse {
+  background: linear-gradient(135deg, #c4a7ff, #7c4dff);
+}
+.action-icon.export {
+  background: linear-gradient(135deg, #ffcf70, #f08a24);
+}
+.step-badge {
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 999px;
+  background: alpha(@accent_bg_color, 0.15);
+  color: @accent_color;
+  font-weight: 800;
+}
+
+/* Hovedvinduet, som Vifte: en svak blå glød (fargen fra kartnålen) og kort som svever over bakgrunnen.
+   Dialogene ligger utenfor og forblir rolige. */
+.waypoint-main.waypoint-glow {
+  background-image: radial-gradient(farthest-side at 10% 0, alpha(#4a8fd0, 0.30), transparent);
+}
+.waypoint-main.waypoint-glow.waypoint-light {
+  background-image: radial-gradient(farthest-side at 10% 0, alpha(#4a8fd0, 0.22), transparent);
+}
+.waypoint-main headerbar {
+  background: none;
+  box-shadow: none;
+}
+.waypoint-main .action-card,
+.waypoint-main .boxed-list {
+  background-color: alpha(white, 0.065);
+  box-shadow: inset 0 1px alpha(white, 0.09), inset 0 0 0 1px alpha(white, 0.07), 0 6px 20px alpha(black, 0.18);
+}
+.waypoint-main .boxed-list {
+  border-radius: 14px;
+}
+.waypoint-main.waypoint-light .action-card,
+.waypoint-main.waypoint-light .boxed-list {
+  background-color: alpha(white, 0.80);
+  box-shadow: inset 0 0 0 1px alpha(black, 0.06), 0 6px 18px alpha(black, 0.08);
+}
+.waypoint-main .action-card:hover {
+  background-color: alpha(white, 0.10);
+}
+.waypoint-main.waypoint-light .action-card:hover {
+  background-color: white;
+}
+
+/* Statusbrikke i oppgavelisten: farget prikk + kort tekst */
+.wp-chip {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 99px;
+  background-color: alpha(@window_fg_color, 0.1);
+}
+.wp-dot {
+  min-width: 7px;
+  min-height: 7px;
+  border-radius: 99px;
+  background-color: alpha(@window_fg_color, 0.35);
+}
+.wp-dot.ok { background-color: @success_color; }
+.wp-dot.live { background-color: #4fe3ff; }
+.wp-dot.warn { background-color: @warning_color; }
+.wp-dot.error { background-color: @error_color; }
+.job-progress trough, .job-progress progress {
+  min-height: 6px;
+  border-radius: 99px;
+}
+
+.bottom-bar {
+  padding: 12px 18px;
+}
+.thumb {
+  border-radius: 8px;
+  border: none;
+}
+.success-status image.icon {
+  color: @success_color;
+}
