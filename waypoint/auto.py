@@ -40,7 +40,33 @@ def command() -> list[str]:
     return ["/usr/bin/env", f"PYTHONPATH={root}", sys.executable, "-m", "waypoint"]
 
 
-def install_timer(enabled: bool) -> bool:
+CALENDAR_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def calendars(jobs: list[dict]) -> list[str]:
+    """OnCalendar-uttrykk for automatiske oppgaver med fast klokkeslett, så timeren våkner akkurat da."""
+    out = []
+    for j in jobs:
+        hm = fixed_time(j) if j.get("enabled") else None
+        if not hm:
+            continue
+        day = CALENDAR_DAYS[int(j.get("weekday") or 0) % 7] + " " if j.get("interval") == "weekly" else ""
+        expr = f"{day}*-*-* {hm[0]:02d}:{hm[1]:02d}:00"
+        if expr not in out:
+            out.append(expr)
+    return out
+
+
+def timer_unit(cal: list[str]) -> str:
+    # Sjekk hvert 15. minutt (intervaller og kopier som ble hoppet over mens maskinen var av), og i tillegg på hvert
+    # faste klokkeslett. AccuracySec=1s: ellers kan systemd utsette en kalendertid med opptil ett minutt.
+    return ("[Unit]\nDescription=Waypoint: check whether a backup is due\n\n"
+            "[Timer]\nOnStartupSec=5min\nOnUnitActiveSec=15min\n"
+            + "".join(f"OnCalendar={c}\n" for c in cal) +
+            "AccuracySec=1s\n\n[Install]\nWantedBy=timers.target\n")
+
+
+def install_timer(enabled: bool, cal: list[str] | None = None) -> bool:
     """Skriver og starter (eller stopper) systemd-timeren."""
     d = unit_dir()
     if enabled:
@@ -49,12 +75,16 @@ def install_timer(enabled: bool) -> bool:
         (d / f"{UNIT}.service").write_text(
             "[Unit]\nDescription=Waypoint: automatic backup\n\n"
             f"[Service]\nType=oneshot\nExecStart={cmd} auto\nNice=10\nIOSchedulingClass=idle\n")
-        (d / f"{UNIT}.timer").write_text(
-            "[Unit]\nDescription=Waypoint: check whether a backup is due\n\n"
-            "[Timer]\nOnStartupSec=5min\nOnUnitActiveSec=15min\nRandomizedDelaySec=60\n\n"
-            "[Install]\nWantedBy=timers.target\n")
+        timer = d / f"{UNIT}.timer"
+        text = timer_unit(cal or [])
+        changed = not timer.exists() or timer.read_text() != text
+        timer.write_text(text)
         system.run(["systemctl", "--user", "daemon-reload"])
-        return system.run(["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"])[0] == 0
+        ok = system.run(["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"])[0] == 0
+        if ok and changed:
+            # En timer som alt går, tar ikke nye OnCalendar-tider i bruk før den startes på nytt.
+            ok = system.run(["systemctl", "--user", "restart", f"{UNIT}.timer"])[0] == 0
+        return ok
     system.run(["systemctl", "--user", "disable", "--now", f"{UNIT}.timer"])
     for suffix in ("service", "timer"):
         (d / f"{UNIT}.{suffix}").unlink(missing_ok=True)
@@ -114,21 +144,68 @@ def interval(job: dict) -> int:
     return INTERVALS.get(job.get("interval"), 86400)
 
 
-def due(job: dict, status: dict) -> bool:
-    age = _ago(status.get("last_success"))
-    return age is None or age >= interval(job) - 300
-
-
-def next_time(job: dict, status: dict) -> datetime | None:
-    if not job.get("enabled"):
+def fixed_time(job: dict) -> tuple[int, int] | None:
+    """(time, minutt) når oppgaven har fast klokkeslett («at»: "HH:MM"); bare for daglige og ukentlige oppgaver."""
+    at = job.get("at")
+    if not at or job.get("interval", "daily") not in ("daily", "weekly"):
         return None
-    last = status.get("last_success")
-    if not last:
-        return datetime.now()
     try:
-        return datetime.fromisoformat(last).replace(tzinfo=None) + timedelta(seconds=interval(job))
+        h, m = (int(x) for x in at.split(":"))
     except ValueError:
         return None
+    return (h, m) if 0 <= h < 24 and 0 <= m < 60 else None
+
+
+def last_scheduled(job: dict, now: datetime) -> datetime | None:
+    """Siste planlagte tidspunkt som har passert (i dag/i går kl. HH:MM, eller sist ukedag kl. HH:MM)."""
+    hm = fixed_time(job)
+    if not hm:
+        return None
+    cand = now.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+    if job.get("interval") == "weekly":
+        cand -= timedelta(days=(cand.weekday() - int(job.get("weekday") or 0)) % 7)
+        if cand > now:
+            cand -= timedelta(days=7)
+    elif cand > now:
+        cand -= timedelta(days=1)
+    return cand
+
+
+def _parse(iso: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(iso).astimezone() if iso else None
+    except ValueError:
+        return None
+
+
+def due(job: dict, status: dict, now: datetime | None = None) -> bool:
+    """Uten fast klokkeslett: når det har gått et helt intervall siden siste kopi. Med fast klokkeslett: når det
+    planlagte tidspunktet har passert siden siste kopi – også hvis maskinen var av da (kopien tas så snart den er på)."""
+    now = (now or datetime.now()).astimezone()
+    sched = last_scheduled(job, now)
+    last = _parse(status.get("last_success"))
+    if sched is None:
+        return last is None or (now - last).total_seconds() >= interval(job) - 300
+    if last is None:
+        # Aldri tatt: vent til første planlagte tidspunkt etter at oppgaven ble slått på (ikke midt på dagen).
+        since = _parse(status.get("enabled_since"))
+        return since is None or sched >= since
+    return last < sched
+
+
+def next_time(job: dict, status: dict, now: datetime | None = None) -> datetime | None:
+    """Neste planlagte kopi (lokal tid uten tidssone, for visning). Er den alt på tide: nå."""
+    if not job.get("enabled"):
+        return None
+    now = (now or datetime.now()).astimezone()
+    if due(job, status, now):
+        return now.replace(tzinfo=None)
+    sched = last_scheduled(job, now)
+    if sched is not None:
+        step = timedelta(days=7 if job.get("interval") == "weekly" else 1)
+        return (sched + step).replace(tzinfo=None)
+    last = _parse(status.get("last_success"))
+    return (last + timedelta(seconds=interval(job))).replace(tzinfo=None) if last else now.replace(tzinfo=None)
 
 
 def now_iso() -> str:
@@ -137,7 +214,8 @@ def now_iso() -> str:
 
 def sync_timer() -> bool:
     """Timeren skal kjøre så lenge minst én oppgave er automatisk."""
-    return install_timer(any(j.get("enabled") for j in settings.jobs()))
+    jobs = settings.jobs()
+    return install_timer(any(j.get("enabled") for j in jobs), calendars(jobs))
 
 
 def notify(title: str, body: str):

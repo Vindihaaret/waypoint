@@ -13,7 +13,8 @@ time, recover a single file, or **move your whole setup to a new installation** 
 
 * **Backup tasks**: choose what to back up (everything, personal files only, setup and settings only, or your own
   selection), where (an external disk, a USB drive or a NAS) and how often. For example: your files to an external
-  disk every hour and your settings to the NAS every day.
+  disk every hour and your settings to the NAS every day at 02:00. Daily and weekly backups can run at a fixed time
+  (and weekday); if the computer is off then, the backup is made as soon as it is on again.
 * **Incremental and encrypted** with [restic](https://restic.net): the first backup copies everything, after that
   only new and changed files are stored. Everything is encrypted with AES-256 before it leaves the computer.
 * **Like Time Machine**: backups run in the background, even when Waypoint is closed. Old points in time are thinned
@@ -78,7 +79,8 @@ files. Later versions can be installed from the app (*Settings → General → U
   GNOME's GVfs (like the Files app); the password is stored in the GNOME keyring so the background backups can
   reconnect. Backups can also be read without Waypoint: `restic -r <folder>/Waypoint snapshots`.
 * **Automatic backups**: a systemd user timer (`waypoint-auto.timer`) runs `waypoint auto` every 15 minutes. Each
-  automatic task runs when it is due and the storage is available. Rules: not on battery, not on metered networks
+  automatic task runs when it is due (an interval since the last backup, or a fixed time that has passed) and the
+  storage is available. Rules: not on battery, not on metered networks
   (for a NAS), and a notification when it has been too long since the last backup.
 * **Encryption**: all backup tasks share one password, stored in the keyring. Without it nobody can open the
   backups – not even you, so write it down somewhere safe.

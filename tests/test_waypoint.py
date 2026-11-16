@@ -749,6 +749,65 @@ print(len(r.snapshots(job_id="solo")), len([s for s in r.snapshots() if repo.sna
             self.assertEqual(r.stdout.split(), ["0", "0", "2", "0"])
 
 
+class ScheduleTests(unittest.TestCase):
+    """Fast klokkeslett for automatiske kopier."""
+
+    def t(self, iso):
+        from datetime import datetime
+        return datetime.fromisoformat(iso).astimezone()
+
+    def test_daily_at_fixed_time(self):
+        from waypoint import auto
+        job = {"enabled": True, "interval": "daily", "at": "02:00"}
+        st = {"last_success": "2026-11-15T02:05:00+01:00"}
+        self.assertFalse(auto.due(job, st, self.t("2026-11-16T01:30:00+01:00")))   # før 02:00
+        self.assertTrue(auto.due(job, st, self.t("2026-11-16T02:10:00+01:00")))    # etter 02:00
+        self.assertTrue(auto.due(job, st, self.t("2026-11-16T09:00:00+01:00")))    # maskinen var av kl. 02
+        done = {"last_success": "2026-11-16T09:01:00+01:00"}
+        self.assertFalse(auto.due(job, done, self.t("2026-11-16T23:00:00+01:00")))  # tatt i dag, vent til i morgen
+        self.assertEqual(str(auto.next_time(job, done, self.t("2026-11-16T23:00:00+01:00"))), "2026-11-17 02:00:00")
+
+    def test_weekly_on_weekday(self):
+        from waypoint import auto
+        job = {"enabled": True, "interval": "weekly", "at": "21:30", "weekday": 6}   # søndag
+        st = {"last_success": "2026-11-15T21:40:00+01:00"}                          # søndag 15.11.
+        self.assertFalse(auto.due(job, st, self.t("2026-11-21T22:00:00+01:00")))    # lørdag
+        self.assertTrue(auto.due(job, st, self.t("2026-11-22T21:31:00+01:00")))     # søndag etter 21:30
+        self.assertEqual(str(auto.next_time(job, st, self.t("2026-11-16T09:00:00+01:00"))), "2026-11-22 21:30:00")
+
+    def test_first_backup_waits_for_the_time(self):
+        from waypoint import auto
+        job = {"enabled": True, "interval": "daily", "at": "02:00"}
+        st = {"enabled_since": "2026-11-16T10:00:00+01:00"}                          # slått på kl. 10
+        self.assertFalse(auto.due(job, st, self.t("2026-11-16T15:00:00+01:00")))
+        self.assertTrue(auto.due(job, st, self.t("2026-11-17T02:05:00+01:00")))
+
+    def test_timer_wakes_at_fixed_times(self):
+        from waypoint import auto
+        jobs = [{"enabled": True, "interval": "daily", "at": "11:45"},
+                {"enabled": True, "interval": "weekly", "at": "21:30", "weekday": 6},
+                {"enabled": False, "interval": "daily", "at": "03:00"},     # ikke automatisk
+                {"enabled": True, "interval": "hourly", "at": "04:00"},     # klokkeslett gjelder ikke
+                {"enabled": True, "interval": "daily"}]
+        cal = auto.calendars(jobs)
+        self.assertEqual(cal, ["*-*-* 11:45:00", "Sun *-*-* 21:30:00"])
+        unit = auto.timer_unit(cal)
+        self.assertIn("OnUnitActiveSec=15min", unit)
+        self.assertIn("OnCalendar=Sun *-*-* 21:30:00\n", unit)
+        for c in cal:
+            self.assertEqual(subprocess.run(["systemd-analyze", "calendar", c], capture_output=True).returncode, 0)
+
+    def test_without_fixed_time_and_hourly_unchanged(self):
+        from waypoint import auto
+        st = {"last_success": "2026-11-16T08:00:00+01:00"}
+        daily = {"enabled": True, "interval": "daily"}
+        self.assertFalse(auto.due(daily, st, self.t("2026-11-16T20:00:00+01:00")))
+        self.assertTrue(auto.due(daily, st, self.t("2026-11-17T08:00:00+01:00")))
+        hourly = {"enabled": True, "interval": "hourly", "at": "02:00"}             # klokkeslett gjelder ikke
+        self.assertTrue(auto.due(hourly, st, self.t("2026-11-16T09:00:00+01:00")))
+        self.assertIsNone(auto.fixed_time(hourly))
+
+
 class UpdaterTests(unittest.TestCase):
     def _tar(self, d: Path, version: str, extra=None) -> Path:
         import tarfile

@@ -26,8 +26,19 @@ def preset_label(job: dict) -> str:
     return _(p) + (" " + _("(tilpasset)") if job.get("choices") else "")
 
 
+WEEKDAYS = [N_("mandag"), N_("tirsdag"), N_("onsdag"), N_("torsdag"), N_("fredag"), N_("lørdag"), N_("søndag")]
+
+
 def schedule_label(job: dict) -> str:
-    return _(dict(INTERVALS).get(job.get("interval"), INTERVALS[1][1])) if job.get("enabled") else _("Bare manuelt")
+    """«Hver dag», «Hver dag kl. 02:00», «Hver uke, søndag kl. 21:30» eller «Bare manuelt»."""
+    if not job.get("enabled"):
+        return _("Bare manuelt")
+    text = _(dict(INTERVALS).get(job.get("interval"), INTERVALS[1][1]))
+    if auto.fixed_time(job):
+        if job.get("interval") == "weekly":
+            text = f"{text}, {_(WEEKDAYS[int(job.get('weekday') or 0) % 7])}"
+        text = _("{} kl. {}").format(text, job["at"])
+    return text
 
 
 def status_line(job: dict, st: dict) -> str:
@@ -338,8 +349,32 @@ def job_page(win, job: dict | None) -> Adw.NavigationPage:
     ikeys = [k for k, _l in INTERVALS]
     often = Adw.ComboRow(title=_("Hvor ofte"), model=Gtk.StringList.new([_(lbl) for _k, lbl in INTERVALS]))
     often.set_selected(ikeys.index(job.get("interval")) if job.get("interval") in ikeys else 1)
+    # Fast klokkeslett (og ukedag) for daglige og ukentlige kopier. Ellers tas kopien når det har gått et døgn/en uke.
+    fixed = Adw.SwitchRow(title=_("Fast klokkeslett"), active=bool(job.get("at")))
+    hour, minute = (int(x) for x in (job.get("at") or "02:00").split(":"))
+    time_row = Adw.ActionRow(title=_("Klokkeslett"))
+
+    def spin(value, top, step):
+        b = Gtk.SpinButton.new_with_range(0, top, step)
+        b.set_value(value)
+        b.set_valign(Gtk.Align.CENTER)
+        b.set_numeric(True)
+        b.set_wrap(True)
+        b.connect("output", lambda sb: sb.set_text(f"{int(sb.get_value()):02d}") or True)
+        return b
+    hour_spin, minute_spin = spin(hour, 23, 1), spin(minute - minute % 5, 55, 5)
+    time_box = Gtk.Box(spacing=4, valign=Gtk.Align.CENTER)
+    time_box.append(hour_spin)
+    time_box.append(Gtk.Label(label=":"))
+    time_box.append(minute_spin)
+    time_row.add_suffix(time_box)
+    weekday = Adw.ComboRow(title=_("Ukedag"), model=Gtk.StringList.new([_(d).capitalize() for d in WEEKDAYS]))
+    weekday.set_selected(int(job.get("weekday") or 0) % 7)
     when.add(automatic)
     when.add(often)
+    when.add(fixed)
+    when.add(weekday)
+    when.add(time_row)
     box.append(when)
 
     if not is_new:
@@ -362,7 +397,15 @@ def job_page(win, job: dict | None) -> Adw.NavigationPage:
             storage_btn.add_css_class("suggested-action")
         custom.set_subtitle(_("Egne valg") if job.get("choices") else _("Standardvalgene for «{}»").format(
             _(dict(PRESETS)[job.get("preset") or "all"])))
-        often.set_sensitive(automatic.get_active())
+        on = automatic.get_active()
+        often.set_sensitive(on)
+        timed = ikeys[often.get_selected()] in ("daily", "weekly")
+        fixed.set_visible(on and timed)
+        has_time = on and timed and fixed.get_active()
+        time_row.set_visible(has_time)
+        weekday.set_visible(has_time and ikeys[often.get_selected()] == "weekly")
+        fixed.set_subtitle(_("Står maskinen av da, tas kopien så snart den er på igjen") if fixed.get_active() else
+                           _("Ellers tas kopien når det har gått et døgn eller en uke siden forrige"))
         problem = None
         if not name.get_text().strip():
             problem = _("Gi oppgaven et navn")
@@ -380,6 +423,8 @@ def job_page(win, job: dict | None) -> Adw.NavigationPage:
     preset.connect("notify::selected", preset_changed)
     name.connect("changed", lambda *_a: refresh())
     automatic.connect("notify::active", lambda *_a: refresh())
+    often.connect("notify::selected", lambda *_a: refresh())
+    fixed.connect("notify::active", lambda *_a: refresh())
 
     def pick_storage(*_a):
         def chosen(cfg):
@@ -399,6 +444,11 @@ def job_page(win, job: dict | None) -> Adw.NavigationPage:
         job["name"] = name.get_text().strip()
         job["enabled"] = automatic.get_active()
         job["interval"] = ikeys[often.get_selected()]
+        if fixed.get_active() and job["interval"] in ("daily", "weekly"):
+            job["at"] = f"{int(hour_spin.get_value()):02d}:{int(minute_spin.get_value()):02d}"
+            job["weekday"] = weekday.get_selected()
+        else:
+            job["at"] = None
         old = settings.job(job["id"])
         settings.save_job(job)
         if job["enabled"] and (not old or not old.get("enabled")):

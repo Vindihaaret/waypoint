@@ -558,3 +558,20 @@ T.update({
 "Passordet for sikkerhetskopiene": ("The backup password", "Das Sicherungspasswort", "La contraseña de las copias", "Le mot de passe des sauvegardes"),
 "Fant ingen sikkerhetskopier fra Waypoint her. Velg mappen som inneholder mappen «Waypoint».": ("No Waypoint backups were found here. Choose the folder that contains the “Waypoint” folder.", "Hier wurden keine Waypoint-Sicherungen gefunden. Wählen Sie den Ordner, der den Ordner „Waypoint“ enthält.", "No se encontraron copias de Waypoint aquí. Elige la carpeta que contiene la carpeta «Waypoint».", "Aucune sauvegarde Waypoint trouvée ici. Choisissez le dossier qui contient le dossier « Waypoint »."),
 })
+
+# --- fast klokkeslett for automatiske kopier
+T.update({
+"mandag": ("Monday", "Montag", "lunes", "lundi"),
+"tirsdag": ("Tuesday", "Dienstag", "martes", "mardi"),
+"onsdag": ("Wednesday", "Mittwoch", "miércoles", "mercredi"),
+"torsdag": ("Thursday", "Donnerstag", "jueves", "jeudi"),
+"fredag": ("Friday", "Freitag", "viernes", "vendredi"),
+"lørdag": ("Saturday", "Samstag", "sábado", "samedi"),
+"søndag": ("Sunday", "Sonntag", "domingo", "dimanche"),
+"Fast klokkeslett": ("Fixed time", "Feste Uhrzeit", "Hora fija", "Heure fixe"),
+"Klokkeslett": ("Time", "Uhrzeit", "Hora", "Heure"),
+"Ukedag": ("Weekday", "Wochentag", "Día de la semana", "Jour de la semaine"),
+"{} kl. {}": ("{} at {}", "{} um {}", "{} a las {}", "{} à {}"),
+"Står maskinen av da, tas kopien så snart den er på igjen": ("If the computer is off then, the backup is made as soon as it is on again", "Ist der Rechner dann aus, wird die Sicherung erstellt, sobald er wieder läuft", "Si el equipo está apagado a esa hora, la copia se hace en cuanto vuelva a encenderse", "Si l'ordinateur est éteint à ce moment, la sauvegarde est faite dès qu'il est rallumé"),
+"Ellers tas kopien når det har gått et døgn eller en uke siden forrige": ("Otherwise the backup is made when a day or a week has passed since the last one", "Sonst wird gesichert, wenn seit der letzten Sicherung ein Tag oder eine Woche vergangen ist", "Si no, la copia se hace cuando ha pasado un día o una semana desde la anterior", "Sinon, la sauvegarde est faite quand un jour ou une semaine s'est écoulé depuis la précédente"),
+})
