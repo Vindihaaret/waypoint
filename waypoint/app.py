@@ -44,6 +44,13 @@ def in_thread(work, done, *args):
     threading.Thread(target=runner, daemon=True).start()
 
 
+def set_class(widget: Gtk.Widget, name: str, on: bool):
+    if on:
+        widget.add_css_class(name)
+    else:
+        widget.remove_css_class(name)
+
+
 def label(text="", css=(), xalign=0.0, wrap=False, **kw) -> Gtk.Label:
     lbl = Gtk.Label(label=text, xalign=xalign, wrap=wrap, **kw)
     if wrap:
@@ -318,13 +325,17 @@ class Window(Adw.ApplicationWindow):
     def __init__(self, app):
         super().__init__(application=app, title="Waypoint", default_width=640, default_height=760)
         self.set_size_request(380, 500)
-        # Vifte-stilen (glød og svevende kort, se style.css) har egne verdier for lyst tema.
+        # Vifte-fargene (bakgrunn, glød og svevende kort, se style.css).
         self.add_css_class("waypoint-main")
         sm = Adw.StyleManager.get_default()
-        self._sync_light = lambda *_a: (self.remove_css_class("waypoint-light") if sm.get_dark()
-                                        else self.add_css_class("waypoint-light"))
-        sm.connect("notify::dark", self._sync_light)
-        self._sync_light()
+
+        def sync_style(*_a):
+            # Lyst tema har egne verdier; høy kontrast beholder de vanlige systemfargene.
+            set_class(self, "waypoint-light", not sm.get_dark())
+            set_class(self, "waypoint-glass", not sm.get_high_contrast())
+        sm.connect("notify::dark", sync_style)
+        sm.connect("notify::high-contrast", sync_style)
+        sync_style()
         self.set_glow(bool(settings.get("glow")))
         self.busy = False
         self.cancel_flag = False
@@ -347,10 +358,7 @@ class Window(Adw.ApplicationWindow):
 
     def set_glow(self, on: bool):
         """Den svake blå gløden i bakgrunnen; kan slås av i menyen for ekstra tydelighet."""
-        if on:
-            self.add_css_class("waypoint-glow")
-        else:
-            self.remove_css_class("waypoint-glow")
+        set_class(self, "waypoint-glow", on)
 
     def toast(self, text: str):
         self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=5))

@@ -45,36 +45,65 @@
   font-weight: 800;
 }
 
-/* Hovedvinduet, som Vifte: en svak blå glød (fargen fra kartnålen) og kort som svever over bakgrunnen.
-   Dialogene ligger utenfor og forblir rolige. */
-.waypoint-main.waypoint-glow {
-  background-image: radial-gradient(farthest-side at 10% 0, alpha(#4a8fd0, 0.30), transparent);
+/* Hovedvinduet med Vifte-fargene (som Vifte 2.0 og Link Studio): nesten svart (mørkt) eller lys grå-blå (lyst)
+   bakgrunn, svak blå glød øverst til høyre, gjennomsiktige kort med dyp skygge og tydeligere tekst og linjer.
+   Ikke i høy kontrast (der mangler klassen waypoint-glass). Dialogene ligger utenfor og forblir rolige.
+   Bare alpha() og vanlige farger: var() og color-mix() krever nyere GTK. */
+.waypoint-main.waypoint-glass {
+  color: #F5F5F7;
+  background-color: #0D1016;
+  background-image: linear-gradient(165deg, #141821, #0D1016 55%, #090B10);
 }
-.waypoint-main.waypoint-glow.waypoint-light {
-  background-image: radial-gradient(farthest-side at 10% 0, alpha(#4a8fd0, 0.22), transparent);
+.waypoint-main.waypoint-glass.waypoint-glow {
+  background-image: radial-gradient(75% 65% at 88% -12%, alpha(#6080BE, 0.20), transparent 70%),
+                    radial-gradient(55% 45% at 0% 100%, alpha(#465A82, 0.12), transparent 70%),
+                    linear-gradient(165deg, #141821, #0D1016 55%, #090B10);
+}
+.waypoint-main.waypoint-glass.waypoint-light {
+  color: #1D1D1F;
+  background-color: #E8EBF0;
+  background-image: linear-gradient(165deg, #F2F4F8, #E8EBF0);
+}
+.waypoint-main.waypoint-glass.waypoint-light.waypoint-glow {
+  background-image: radial-gradient(75% 65% at 88% -12%, alpha(#7896CD, 0.22), transparent 70%),
+                    linear-gradient(165deg, #F2F4F8, #E8EBF0);
 }
 .waypoint-main headerbar {
   background: none;
   box-shadow: none;
 }
-.waypoint-main .action-card,
-.waypoint-main .boxed-list {
-  background-color: alpha(white, 0.065);
-  box-shadow: inset 0 1px alpha(white, 0.09), inset 0 0 0 1px alpha(white, 0.07), 0 6px 20px alpha(black, 0.18);
+.waypoint-glass .dim-label { opacity: 1; color: #B4B8C2; }
+.waypoint-glass.waypoint-light .dim-label { color: #55585E; }
+.waypoint-glass separator { background-color: alpha(white, 0.09); }
+.waypoint-glass.waypoint-light separator { background-color: alpha(black, 0.08); }
+.waypoint-glass .action-card,
+.waypoint-glass list.boxed-list {
+  background-color: alpha(white, 0.055);
+  box-shadow: inset 0 1px alpha(white, 0.09), inset 0 0 0 1px alpha(white, 0.06), 0 12px 32px alpha(black, 0.35);
 }
-.waypoint-main .boxed-list {
+.waypoint-main list.boxed-list {
   border-radius: 14px;
 }
-.waypoint-main.waypoint-light .action-card,
-.waypoint-main.waypoint-light .boxed-list {
-  background-color: alpha(white, 0.80);
-  box-shadow: inset 0 0 0 1px alpha(black, 0.06), 0 6px 18px alpha(black, 0.08);
+.waypoint-glass.waypoint-light .action-card,
+.waypoint-glass.waypoint-light list.boxed-list {
+  background-color: alpha(white, 0.66);
+  box-shadow: inset 0 1px alpha(white, 0.9), inset 0 0 0 1px alpha(white, 0.55), 0 10px 28px alpha(#1E283C, 0.10);
 }
-.waypoint-main .action-card:hover {
-  background-color: alpha(white, 0.10);
+.waypoint-glass .action-card:hover {
+  background-color: alpha(white, 0.09);
 }
-.waypoint-main.waypoint-light .action-card:hover {
-  background-color: white;
+.waypoint-glass.waypoint-light .action-card:hover {
+  background-color: alpha(white, 0.9);
+}
+.waypoint-glass list.boxed-list > row { border-bottom-color: alpha(white, 0.09); }
+.waypoint-glass.waypoint-light list.boxed-list > row { border-bottom-color: alpha(black, 0.08); }
+.waypoint-glass .wp-statusbar {
+  background-color: alpha(white, 0.045);
+  box-shadow: inset 0 1px alpha(white, 0.09);
+}
+.waypoint-glass.waypoint-light .wp-statusbar {
+  background-color: alpha(white, 0.5);
+  box-shadow: inset 0 1px alpha(black, 0.08);
 }
 
 /* Statusbrikke i oppgavelisten: farget prikk + kort tekst */

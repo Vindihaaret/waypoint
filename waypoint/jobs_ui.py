@@ -181,6 +181,7 @@ class StatusBar(Gtk.Revealer):
 
     def __init__(self, win):
         super().__init__(transition_type=Gtk.RevealerTransitionType.SLIDE_UP)
+        self.add_css_class("wp-statusbar")
         self.win = win
         self.dismissed: set[str] = set()   # «jobb-id:started» som brukeren har skjult
         self.job_id: str | None = None
