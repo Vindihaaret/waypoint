@@ -13,6 +13,7 @@
   waypoint inspect <file>     show what an exported file contains and what is missing on this computer
   waypoint auto [--now] [--job ID]   automatic backups (run by the systemd timer)
   waypoint tray               the system tray icon
+  waypoint uninstall [--purge]   remove Waypoint (--purge: also its settings); your backups are kept
 """
 
 import sys
@@ -62,6 +63,14 @@ def main(argv=None):
     if cmd in ("preferences", "browse", "progress"):
         from .app import main as app_main
         return app_main([], action=cmd)
+    if cmd == "uninstall":
+        import subprocess
+        from . import updater
+        script = updater.install_dir() / "uninstall.sh"
+        if not script.is_file():
+            print(f"Waypoint does not appear to be installed ({script} not found).", file=sys.stderr)
+            return 1
+        return subprocess.call(["bash", str(script), *(["--purge"] if "--purge" in argv else [])])
     if cmd == "check":
         from . import auto
         return 0 if auto.check_all() else 1

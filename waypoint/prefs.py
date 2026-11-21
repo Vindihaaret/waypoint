@@ -330,7 +330,63 @@ class Preferences(Adw.PreferencesDialog):
         t.add(auto_start)
         p.add(t)
         p.add(self._update_group())
+        # Avinstallering ligger nederst her (ikke i hovedmenyen), så det må være et aktivt valg.
+        from . import updater
+        if updater.is_installed() and (updater.install_dir() / "uninstall.sh").is_file():
+            u = Adw.PreferencesGroup()
+            row = Adw.ActionRow(title=_("Avinstaller Waypoint"),
+                                subtitle=_("Programmet, menyoppføringen, statusfeltikonet og de automatiske kopiene "
+                                           "fjernes. Sikkerhetskopiene dine beholdes."))
+            btn = Gtk.Button(label=_("Avinstaller"), valign=Gtk.Align.CENTER)
+            btn.add_css_class("destructive-action")
+            btn.connect("clicked", lambda *_a: self._uninstall())
+            row.add_suffix(btn)
+            u.add(row)
+            p.add(u)
         return p
+
+    # ------------------------------------------------------------ avinstallering
+
+    def _uninstall(self):
+        d = Adw.AlertDialog(heading=_("Avinstaller Waypoint"),
+                            body=_("Programmet, menyoppføringen, statusfeltikonet og de automatiske kopiene fjernes. "
+                                   "Sikkerhetskopiene dine og passordet i nøkkelringen beholdes, så du kan hente "
+                                   "dem tilbake senere."))
+        purge = Gtk.CheckButton(label=_("Slett også innstillingene og oppgavene"))
+        d.set_extra_child(purge)
+        d.add_response("cancel", _("Avbryt"))
+        d.add_response("uninstall", _("Avinstaller"))
+        d.set_response_appearance("uninstall", Adw.ResponseAppearance.DESTRUCTIVE)
+        d.set_default_response("cancel")
+        d.set_close_response("cancel")
+        d.connect("response", lambda _d, r: r == "uninstall" and self._run_uninstall(purge.get_active()))
+        d.present(self)
+
+    def _run_uninstall(self, purge: bool):
+        from . import updater
+        argv = ["bash", str(updater.install_dir() / "uninstall.sh")] + (["--purge"] if purge else [])
+        try:
+            proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
+        except GLib.Error as e:
+            self.add_toast(Adw.Toast(title=_("Avinstallering feilet: {}").format(e.message)))
+            return
+        app = self.win.get_application()
+
+        def done(p, res):
+            try:
+                _ok, out, _err = p.communicate_utf8_finish(res)
+            except GLib.Error as e:
+                out = e.message
+            if p.get_successful():
+                msg = Adw.AlertDialog(heading=_("Waypoint er avinstallert"),
+                                      body=_("Sikkerhetskopiene dine ligger der de var. Installer Waypoint igjen "
+                                             "for å hente dem tilbake."))
+                msg.add_response("ok", _("OK"))
+                msg.connect("response", lambda *_a: app.quit())
+                msg.present(self.win)
+            else:
+                self.add_toast(Adw.Toast(title=_("Avinstallering feilet: {}").format((out or "").strip()[-200:])))
+        proc.communicate_utf8_async(None, None, done)
 
     # ------------------------------------------------------------ oppdateringer
 

@@ -5,18 +5,100 @@ cd "$(dirname "$(readlink -f "$0")")"
 PREFIX="${XDG_DATA_HOME:-$HOME/.local/share}"
 BIN="$HOME/.local/bin"
 
-python3 - <<'PY' || { echo "Waypoint needs Python 3.10+, PyGObject, GTK 4.12+ and libadwaita 1.6+."; \
-  echo "openSUSE: sudo zypper install python3-gobject typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1"; \
-  echo "Fedora:   sudo dnf install python3-gobject gtk4 libadwaita"; \
-  echo "Ubuntu:   sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1"; exit 1; }
+# ---------------------------------------------------------------- dependencies
+# Anything missing is installed with the system's package manager (asks for your password through sudo).
+# Only when run from a terminal: the in-app update runs this script without one and skips this step.
+gui_ok() {
+  python3 - <<'PY' 2>/dev/null
 import sys
 assert sys.version_info >= (3, 10)
 import gi
-gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1")
-from gi.repository import Gtk, Adw
+gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); gi.require_version("Secret", "1")
+from gi.repository import Gtk, Adw, Secret
 assert (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 12)
 assert (Adw.get_major_version(), Adw.get_minor_version()) >= (1, 6)
 PY
+}
+have_gvfs() {  # a GVfs backend program, e.g. gvfsd-smb (its folder differs between distributions)
+  local d
+  for d in /usr/libexec/gvfs /usr/libexec /usr/lib/gvfs /usr/lib; do [ -x "$d/$1" ] && return 0; done
+  return 1
+}
+missing() {  # what is missing, by name: gui restic gpg dconf gio smb sftp fuse
+  gui_ok || echo gui
+  command -v restic >/dev/null || echo restic
+  command -v gpg >/dev/null || echo gpg
+  command -v dconf >/dev/null || echo dconf
+  command -v gio >/dev/null || echo gio
+  have_gvfs gvfsd-smb || echo smb
+  have_gvfs gvfsd-sftp || echo sftp
+  have_gvfs gvfsd-fuse || echo fuse
+}
+packages() {  # package names for one missing item ($1) with this package manager ($2)
+  case "$2:$1" in
+    zypper:gui) echo python3-gobject typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 typelib-1_0-Secret-1 ;;
+    zypper:gpg) echo gpg2 ;;
+    zypper:gio) echo glib2-tools ;;
+    zypper:smb) echo gvfs-backend-samba ;;
+    zypper:sftp) echo gvfs-backends ;;
+    zypper:fuse) echo gvfs-fuse ;;
+    dnf:gui) echo python3-gobject gtk4 libadwaita libsecret ;;
+    dnf:gpg) echo gnupg2 ;;
+    dnf:gio) echo glib2 ;;
+    dnf:smb) echo gvfs-smb ;;
+    dnf:sftp) echo gvfs ;;
+    dnf:fuse) echo gvfs-fuse ;;
+    apt-get:gui) echo python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1 ;;
+    apt-get:gpg) echo gnupg ;;
+    apt-get:dconf) echo dconf-cli ;;
+    apt-get:gio) echo libglib2.0-bin ;;
+    apt-get:smb | apt-get:sftp) echo gvfs-backends ;;
+    apt-get:fuse) echo gvfs-fuse ;;
+    pacman:gui) echo python-gobject gtk4 libadwaita libsecret ;;
+    pacman:gpg) echo gnupg ;;
+    pacman:gio) echo glib2 ;;
+    pacman:smb) echo gvfs-smb ;;
+    pacman:sftp | pacman:fuse) echo gvfs ;;
+    *) echo "$1" ;;  # restic and dconf have the same name everywhere else
+  esac
+}
+
+MISSING=$(missing | xargs)
+PKGS=""
+if [ -n "$MISSING" ]; then
+  PM=""
+  for pm in zypper dnf apt-get pacman; do
+    if command -v "$pm" >/dev/null; then PM=$pm; break; fi
+  done
+  if [ -n "$PM" ]; then
+    PKGS=$(for m in $MISSING; do packages "$m" "$PM"; done | tr ' ' '\n' | sort -u | xargs)
+  fi
+  if [ -n "$PM" ] && [ -t 0 ] && [ -z "${WAYPOINT_SKIP_DEPS:-}" ]; then
+    echo "==> Installing what Waypoint needs: $PKGS"
+    case "$PM" in
+      zypper) sudo zypper --non-interactive install $PKGS || true ;;
+      dnf) sudo dnf install -y $PKGS || true ;;
+      apt-get) sudo apt-get install -y $PKGS || true ;;
+      pacman) sudo pacman -S --needed --noconfirm $PKGS || true ;;
+    esac
+    MISSING=$(missing | xargs)
+  fi
+fi
+if [[ " $MISSING " == *" gui "* ]]; then
+  echo "ERROR: Waypoint needs Python 3.10+, PyGObject, GTK 4.12+, libadwaita 1.6+ and libsecret."
+  echo "       Install them with your package manager and run this script again."
+  if [ -n "$PKGS" ]; then echo "       Packages: $PKGS"; fi
+  exit 1
+fi
+if [ -n "$MISSING" ]; then
+  echo "Note: still missing: $MISSING"
+  case " $MISSING " in *" restic "*) echo "      Backups need restic." ;; esac
+  case " $MISSING " in *" gpg "*) echo "      Encrypted export files need gpg." ;; esac
+  case " $MISSING " in *" dconf "*) echo "      GNOME settings are only backed up with dconf." ;; esac
+  case " $MISSING " in *" gio "* | *" smb "* | *" sftp "* | *" fuse "*)
+    echo "      Storage on a NAS needs GVfs (gio, SMB/SFTP and FUSE)." ;; esac
+  if [ -n "$PKGS" ]; then echo "      Packages to install: $PKGS"; fi
+fi
 
 # Remove the old installation from when the app was called Flytt (its settings are moved on first start).
 rm -rf "$PREFIX/flytt/app"
@@ -30,6 +112,7 @@ CODE="$PREFIX/waypoint/app"
 rm -rf "$CODE"
 mkdir -p "$CODE" "$BIN"
 cp -r waypoint "$CODE/"
+install -m755 uninstall.sh "$CODE/uninstall.sh"   # used by "waypoint uninstall" and Settings → General
 find "$CODE" -name __pycache__ -prune -exec rm -rf {} +
 cat > "$BIN/waypoint" <<EOS
 #!/bin/sh
@@ -53,4 +136,4 @@ fi
 AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/io.github.waypoint.Waypoint-tray.desktop"
 [ -f "$AUTOSTART" ] && sed -i "s|^Exec=.* tray$|Exec=$BIN/waypoint tray|" "$AUTOSTART"
 echo "Waypoint is installed. Start it from the app overview or with \"waypoint\"."
-echo "Backups need restic: sudo zypper install restic (or dnf/apt)."
+echo "Uninstall with: waypoint uninstall   (or Settings → General → Uninstall Waypoint)"

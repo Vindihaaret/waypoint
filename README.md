@@ -63,15 +63,23 @@ moved to `~/.local/share/waypoint/replaced/<time>/`.
 ## Install
 
 ```sh
-sudo zypper install restic        # Fedora: sudo dnf install restic, Ubuntu: sudo apt install restic
 git clone https://github.com/Vindihaaret/waypoint
 cd waypoint
-./install.sh                      # installs to ~/.local, no sudo needed
+./install.sh
 ```
 
-Requires Python 3.10+, PyGObject, GTK 4.12+, libadwaita 1.6+, restic and GVfs (for NAS). gpg is used for exported
-files. Later versions can be installed from the app (*Settings → General → Updates*). To remove: `./uninstall.sh`
-(your backups and settings are kept).
+`install.sh` installs Waypoint in your home folder (`~/.local`) and adds it to the app overview. If something Waypoint
+needs is missing, it is installed first with your package manager (zypper, dnf, apt or pacman), and `sudo` asks for
+your password. Waypoint needs Python 3.10+, PyGObject, GTK 4.12+, libadwaita 1.6+, libsecret, restic, gpg (for
+exported files), dconf (for GNOME settings) and GVfs with SMB, SFTP and FUSE (for a NAS).
+
+**Updates:** *Settings → General → Updates* installs new versions from the app, or run `./install.sh` again from a
+newer copy of the source.
+
+**Uninstall:** *Settings → General → Uninstall Waypoint*, or `waypoint uninstall` in a terminal. The app, its menu
+entry, the system tray icon and the automatic backups are removed. Your backups, the password in the keyring and the
+files kept from restores are left alone, so you can install Waypoint again and get everything back. Add
+`--purge` (or tick the box in the app) to delete your settings and tasks as well.
 
 ## How it works
 
@@ -99,6 +107,7 @@ waypoint check               # verify the backups
 waypoint export [file]       # export your setup to a single file
 waypoint inspect <file>      # show what an exported file contains
 waypoint preferences         # open the settings
+waypoint uninstall [--purge] # remove Waypoint (your backups are kept)
 ```
 
 ## Development

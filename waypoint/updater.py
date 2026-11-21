@@ -124,7 +124,9 @@ def install(tag: str, log=print) -> None:
         raise UpdateError("not an installed Waypoint")
     base, src = download(tag)
     try:
-        p = subprocess.run(["bash", str(src / "install.sh")], cwd=src, capture_output=True, text=True, timeout=300)
+        # Uten terminal og med WAYPOINT_SKIP_DEPS: install.sh skal ikke prøve å installere pakker med sudo her.
+        p = subprocess.run(["bash", str(src / "install.sh")], cwd=src, capture_output=True, text=True, timeout=300,
+                           stdin=subprocess.DEVNULL, env={**os.environ, "WAYPOINT_SKIP_DEPS": "1"})
         for line in (p.stdout + p.stderr).splitlines():
             log(line)
         if p.returncode != 0:
