@@ -52,7 +52,7 @@ Made by **Jan Ivar Sørensen** using [Claude Code](https://claude.com/claude-cod
 | GNOME settings (dconf): shortcuts, theme, dock, mouse, keyboard, app folders | `dconf load`, in three groups you can choose separately |
 | Wallpaper and lock screen | Set again |
 | GNOME extensions | From the backup if they match the GNOME version, otherwise fetched from extensions.gnome.org |
-| System packages you installed yourself (zypper, dnf, apt, pacman), and repositories (zypper, dnf) | Installed again with the administrator password (pkexec); repositories are never selected in advance |
+| System packages you installed yourself (zypper, dnf, apt, pacman), and repositories (zypper, dnf) | Installed again with the administrator password (pkexec); repositories are never selected in advance. From another distribution, Waypoint shows a list of the programs to install yourself instead |
 | Flatpak apps and remotes | `flatpak install` |
 | Personal folders: Documents, Pictures, Music, Videos, Downloads and other folders in your home folder | Put back |
 | Configuration: `~/.config`, fonts, themes, `.bashrc`, `.gitconfig`, `~/.local/bin`, Flatpak app data | Put back |

@@ -206,17 +206,21 @@ class BackupFile:
                 g.items.append(Item(id=e["uuid"], label=e["name"], detail=detail, selected=not here, data=e))
             result.append(Section(_("Utvidelser"), _("Utvidelsene du hadde, og om de var slått på"), [g]))
 
-        apps = Section(_("Programmer"), _("Installeres på nytt fra nettet – krever internett og administratorpassord"))
         mgr = system.package_manager()
-        other = system.PM_NAMES.get(mgr, _("et annet pakkesystem"))
+        # Kopien er fra en annen distribusjon: pakkenavn betyr ikke det samme der (firewalld ved siden av ufw,
+        # snapper uten btrfs …), så Waypoint installerer ingen pakker eller kilder, men gir en liste brukeren kan
+        # installere fra selv.
+        foreign = other_system(m)
+        apps = Section(_("Programmer"), _("Flatpak-apper installeres på nytt fra nettet. Systempakkene får du som en "
+                                          "liste.") if foreign else
+                       _("Installeres på nytt fra nettet – krever internett og administratorpassord"))
         repos = m.get("repos")
-        if repos and repos.get("items"):
+        if repos and repos.get("items") and not foreign:
             g = Group("repos", _("Pakkekilder"), icon="network-server-symbolic",
                       subtitle=_("Legges til før pakkene installeres"))
             current = system.repositories(mgr)
             urls = {_norm(r["url"]) for r in current}
             aliases = {r["alias"] for r in current}
-            same = repos.get("manager") == mgr
             for r in repos["items"]:
                 exists = _norm(r["url"]) in urls or r["alias"] in aliases
                 # En kilde kan gi root-tilgang via pakkene, og kopien kan være laget et annet sted: aldri valgt på
@@ -232,44 +236,45 @@ class BackupFile:
                 else:
                     detail = r["url"] + (" · " + _("nøkkel: {}").format(r["gpgkey"]) if r.get("gpgkey") else "")
                 g.items.append(Item(id=r["alias"], label=r["name"], detail=detail,
-                                    available=same and not exists and ok, selected=False, data=r))
-            if not same:
-                g.note = _("Kopien er laget med {}, denne maskinen bruker {}.").format(
-                    system.PM_NAMES.get(repos.get("manager"), "?"), other)
+                                    available=not exists and ok, selected=False, data=r))
             apps.groups.append(g)
         pk = m.get("packages")
         if pk and pk.get("items"):
-            same = pk.get("manager") == mgr
             installed = system.installed_packages(mgr)
-            # Hvilke navn finnes i pakkekildene her? Med samme pakkesystem (også en annen versjon av distribusjonen)
-            # velges bare de som finnes; resten kan velges for hånd (de kan komme fra en pakkekilde over). Med et
-            # annet pakkesystem kan bare navn som finnes her velges, og ingen er valgt på forhånd.
-            found = system.available_packages(mgr, [p["name"] for p in pk["items"] if p["name"] not in installed])
-            here_name = system.os_release().get("name") or _("denne maskinen")
-            g = Group("packages", _("Systempakker"), icon="system-software-install-symbolic",
-                      subtitle=_("Fra {}").format(system.PM_NAMES.get(pk.get("manager"), "?")))
-            for p in pk["items"]:
-                name = p["name"]
-                here = name in installed
-                exists = found is None or name in found
-                if here:
-                    detail, available, selected = _("Installert"), False, False
-                elif same:
-                    available, selected = True, exists
-                    detail = p.get("summary", "") if exists else \
-                        _("Finnes ikke i pakkekildene her – kanskje i en av pakkekildene over")
-                else:
-                    available = selected = False
-                    detail = _("Finnes ikke på {}").format(here_name)
-                    if found is not None and name in found:
-                        available, detail = True, _("Finnes også her") + (" · " + p["summary"] if p.get("summary")
-                                                                          else "")
-                g.items.append(Item(id=name, label=name, detail=detail, available=available, selected=selected,
-                                    data=p))
-            if not same:
-                g.note = _("Pakkenavnene er fra en annen distribusjon. Pakker med samme navn som finnes her, kan "
-                           "velges – kontroller at de er det du vil ha. Resten kan brukes som huskeliste.")
-            apps.groups.append(g)
+            missing = [p["name"] for p in pk["items"] if p["name"] not in installed]
+            # Hvilke navn finnes i pakkekildene her? Med samme distribusjon (også en annen versjon) velges bare de
+            # som finnes; resten kan velges for hånd (de kan komme fra en pakkekilde over).
+            found = system.available_packages(mgr, missing)
+            if foreign:
+                old = (m.get("distro") or {}).get("name") or system.PM_NAMES.get(pk.get("manager"), "?")
+                g = Group("packages", _("Programmer fra det gamle systemet"), icon="system-software-install-symbolic",
+                          data={"copy": "\n".join(missing)})
+                for p in pk["items"]:
+                    name = p["name"]
+                    if name in installed:
+                        detail = _("Installert")
+                    else:
+                        detail = p.get("summary", "")
+                        if found and name in found:
+                            detail = _("Samme navn finnes her") + (" · " + detail if detail else "")
+                    g.items.append(Item(id=name, label=name, detail=detail, available=False, selected=False, data=p))
+                g.note = _("Fra {}. Installer det du trenger med Programvare eller pakkesystemet her.").format(old)
+                apps.groups.append(g)
+            else:
+                g = Group("packages", _("Systempakker"), icon="system-software-install-symbolic",
+                          subtitle=_("Fra {}").format(system.PM_NAMES.get(pk.get("manager"), "?")))
+                for p in pk["items"]:
+                    name = p["name"]
+                    exists = found is None or name in found
+                    if name in installed:
+                        detail, available, selected = _("Installert"), False, False
+                    else:
+                        available, selected = True, exists
+                        detail = p.get("summary", "") if exists else \
+                            _("Finnes ikke i pakkekildene her – kanskje i en av pakkekildene over")
+                    g.items.append(Item(id=name, label=name, detail=detail, available=available, selected=selected,
+                                        data=p))
+                apps.groups.append(g)
         fp = m.get("flatpaks")
         if fp and fp.get("items"):
             have = system.have("flatpak")
@@ -281,7 +286,9 @@ class BackupFile:
                 g.items.append(Item(id=a["id"], label=a["name"], detail=_("Installert") if here else a["id"],
                                     available=have and not here, selected=have and not here, data=a))
             if not have:
-                g.note = _("Flatpak er ikke installert. Installer pakken «flatpak» først (den står kanskje i listen over).")
+                g.note = _("Flatpak er ikke installert. Installer «flatpak» med Programvare eller pakkesystemet først, "
+                           "og åpne kopien på nytt.") if foreign else \
+                    _("Flatpak er ikke installert. Installer pakken «flatpak» først (den står kanskje i listen over).")
             apps.groups.append(g)
         result.append(apps)
 
@@ -325,14 +332,25 @@ def own_install(rel: str) -> bool:
     return any(rel == p or rel.startswith(p + "/") for p in OWN_INSTALL)
 
 
+def other_system(manifest: dict | None) -> bool:
+    """Er kopien fra en annen distribusjon (eller et annet pakkesystem) enn denne maskinen? En annen versjon av samme
+    distribusjon regnes ikke som annen."""
+    m = manifest or {}
+    old_id = (m.get("distro") or {}).get("id")
+    if old_id and old_id != system.os_release().get("id"):
+        return True
+    old_mgr = (m.get("packages") or {}).get("manager") or (m.get("repos") or {}).get("manager")
+    return bool(old_mgr) and old_mgr != system.package_manager()
+
+
 def distro_mismatch(manifest: dict | None) -> str | None:
     """En forklaring når kopien er tatt på en annen distribusjon enn denne maskinen, ellers None."""
     old = (manifest or {}).get("distro") or {}
     here = system.os_release()
     if not old.get("id") or old.get("id") == here.get("id"):
         return None
-    return _("Kopien er fra {}, denne maskinen kjører {}. Systempakker og pakkekilder kan ikke tas med direkte – "
-             "pakker med samme navn som finnes her, kan velges. Flatpak-apper, utvidelser, innstillinger og filer "
+    return _("Kopien er fra {}, denne maskinen kjører {}. Systempakker installeres ikke – du får en liste over "
+             "programmene du hadde, som du kan installere selv. Flatpak-apper, utvidelser, innstillinger og filer "
              "virker som vanlig.").format(old.get("name") or old["id"], here.get("name") or here.get("id"))
 
 

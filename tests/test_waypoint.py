@@ -687,42 +687,70 @@ class OtherDistroTests(unittest.TestCase):
     """Gjenoppretting til en annen distribusjon (eller en annen versjon av samme): pakker som ikke finnes her, gråes
     ut eller velges ikke, pakker med samme navn kan velges, og et banner forklarer det."""
 
-    def _packages(self, manager_here, found, installed=()):
+    def _sections(self, manager_here, found, installed=(), distro_here=None):
         from waypoint import restore
         manifest = {"app": "waypoint", "distro": {"id": "opensuse-tumbleweed", "name": "openSUSE Tumbleweed"},
+                    "repos": {"manager": "zypper", "items": [
+                        {"alias": "packman", "name": "Packman", "url": "https://ftp.gwdg.de/pub/linux/packman/"}]},
                     "packages": {"manager": "zypper", "items": [
                         {"name": "htop", "summary": "Prosesser"}, {"name": "vlc-codecs"},
-                        {"name": "libxkbcommon-compat"}, {"name": "git"}]}}
+                        {"name": "libxkbcommon-compat"}, {"name": "git"}]},
+                    "flatpaks": {"items": [{"id": "org.localsend.localsend_app", "name": "LocalSend",
+                                            "origin": "flathub", "installation": "system"}]}}
+        here = distro_here or {"id": "fedora", "name": "Fedora 43"}
         fake = mock.Mock(manifest=manifest, encrypted_all=False, staging=Path("/finnes/ikke"))
         with mock.patch.object(restore.system, "package_manager", return_value=manager_here), \
                 mock.patch.object(restore.system, "installed_packages", return_value=set(installed)), \
                 mock.patch.object(restore.system, "available_packages", return_value=found), \
-                mock.patch.object(restore.system, "os_release", return_value={"id": "fedora", "name": "Fedora 43"}), \
+                mock.patch.object(restore.system, "os_release", return_value=here), \
+                mock.patch.object(restore.system, "have", return_value=False), \
                 mock.patch.object(restore.system, "flatpak_apps", return_value=[]), \
                 mock.patch.object(restore.system, "repositories", return_value=[]):
-            secs = restore.BackupFile.sections(fake)
-        from waypoint.model import find_group
-        return {i.id: i for i in find_group(secs, "packages").items}
+            return restore.BackupFile.sections(fake)
 
-    def test_other_package_manager(self):
-        items = self._packages("dnf", {"htop", "git"}, installed={"git"})
-        self.assertTrue(items["htop"].available)
-        self.assertFalse(items["htop"].selected)                 # aldri valgt på forhånd
-        self.assertFalse(items["vlc-codecs"].available)          # finnes ikke på Fedora
-        self.assertFalse(items["git"].available)                 # allerede installert
-        self.assertIn("Fedora 43", items["vlc-codecs"].detail)
+    def _packages(self, *a, **kw):
+        from waypoint.model import find_group
+        return {i.id: i for i in find_group(self._sections(*a, **kw), "packages").items}
+
+    def test_other_distribution_gives_a_list(self):
+        from waypoint.model import find_group
+        secs = self._sections("dnf", {"htop", "git"}, installed={"git"})
+        self.assertIsNone(find_group(secs, "repos"))             # ingen kilder fra et annet system
+        g = find_group(secs, "packages")
+        self.assertFalse(any(i.available or i.selected for i in g.items))   # ingenting installeres
+        self.assertEqual(g.data["copy"].split(), ["htop", "vlc-codecs", "libxkbcommon-compat"])
+        items = {i.id: i for i in g.items}
+        self.assertNotEqual(items["htop"].detail, items["vlc-codecs"].detail)  # samme navn finnes her: merket
+        self.assertIn("openSUSE Tumbleweed", g.note)
+        fp = find_group(secs, "flatpaks")
+        self.assertTrue(fp.note)                                 # Flatpak mangler: beskjed, ikke valgbar
+        self.assertFalse(any(i.available for i in fp.items))
+
+    def test_same_package_manager_other_distribution(self):
+        items = self._packages("zypper", {"htop"}, distro_here={"id": "opensuse-leap", "name": "openSUSE Leap"})
+        self.assertFalse(any(i.available for i in items.values()))
 
     def test_same_manager_other_version(self):
-        items = self._packages("zypper", {"htop", "git", "vlc-codecs"})
+        items = self._packages("zypper", {"htop", "git", "vlc-codecs"},
+                               distro_here={"id": "opensuse-tumbleweed", "name": "openSUSE Tumbleweed"})
         self.assertTrue(items["htop"].selected)
         self.assertTrue(items["libxkbcommon-compat"].available)  # kan komme fra en pakkekilde i kopien
         self.assertFalse(items["libxkbcommon-compat"].selected)  # men velges ikke, så den ikke feiler
 
     def test_query_failed(self):
-        items = self._packages("zypper", None)                   # vet ikke: alt som før
-        self.assertTrue(all(i.selected for i in items.values()))
-        items = self._packages("dnf", None)                      # annet pakkesystem og vet ikke: ingenting
+        items = self._packages("zypper", None, distro_here={"id": "opensuse-tumbleweed"})
+        self.assertTrue(all(i.selected for i in items.values()))  # vet ikke: alt som før
+        items = self._packages("dnf", None)                       # annen distribusjon: bare en liste
         self.assertFalse(any(i.available for i in items.values()))
+
+    def test_other_system(self):
+        from waypoint import restore
+        with mock.patch.object(restore.system, "os_release", return_value={"id": "fedora"}), \
+                mock.patch.object(restore.system, "package_manager", return_value="dnf"):
+            self.assertTrue(restore.other_system({"distro": {"id": "ubuntu"}}))
+            self.assertFalse(restore.other_system({"distro": {"id": "fedora"}, "packages": {"manager": "dnf"}}))
+            self.assertTrue(restore.other_system({"packages": {"manager": "apt"}}))   # gammel kopi uten distro
+            self.assertFalse(restore.other_system({}))
 
     def test_distro_mismatch(self):
         from waypoint import restore

@@ -186,7 +186,23 @@ class Chooser:
         all_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, tooltip_text=_("Velg alle eller ingen"))
         all_check.add_css_class("selection-mode")
         all_check.set_sensitive(bool(usable))
-        exp.add_suffix(all_check)
+        list_only = bool(g.data.get("copy")) and not usable
+        if list_only:
+            # Bare en liste (programmer fra en annen distribusjon): ingenting å velge, men den kan kopieres.
+            copy = Gtk.Button(icon_name="edit-copy-symbolic", valign=Gtk.Align.CENTER,
+                              tooltip_text=_("Kopier listen"))
+            copy.add_css_class("flat")
+
+            def copy_list(btn):
+                btn.get_clipboard().set(g.data["copy"])
+                btn.set_icon_name("object-select-symbolic")
+                btn.set_tooltip_text(_("Listen er kopiert"))
+                GLib.timeout_add_seconds(2, lambda: (btn.set_icon_name("edit-copy-symbolic"),
+                                                     btn.set_tooltip_text(_("Kopier listen")), False)[-1])
+            copy.connect("clicked", copy_list)
+            exp.add_suffix(copy)
+        else:
+            exp.add_suffix(all_check)
         checks: list[tuple[Item, Gtk.CheckButton]] = []
         updating = [False]
 
@@ -232,6 +248,10 @@ class Chooser:
             row = Adw.ActionRow(title=item.label, subtitle=item.detail, use_markup=False)
             # Pakkekilder vises i sin helhet (adresse, eller hele .repo-filen), så brukeren ser hva som legges til.
             row.set_subtitle_lines(0 if g.id == "repos" else 1)
+            if list_only:
+                item.selected = False
+                exp.add_row(row)
+                continue
             chk = Gtk.CheckButton(valign=Gtk.Align.CENTER, active=item.selected and item.available)
             chk.add_css_class("selection-mode")
             row.add_prefix(chk)
