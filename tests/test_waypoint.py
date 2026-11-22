@@ -1,5 +1,6 @@
 """Kjør med: python3 -m unittest discover -s tests (fra prosjektmappen)."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -392,40 +393,92 @@ class ExtractTests(unittest.TestCase):
 
 
 class FlatpakRestoreTests(unittest.TestCase):
-    """Flatpak for hele systemet må kunne be polkit om passordet (ikke --noninteractive), og appene installeres
-    samlet per kilde, med én og én som reserve."""
+    """Flatpak for hele systemet installeres av root-hjelperen (Flatpak selv får ikke spurt om passordet fra et
+    vindu), Flatpak for brukeren direkte, samlet per kilde med én og én som reserve."""
 
-    def _run(self, fail_together):
+    def _run(self, fail_together=False, helper_ok=("org.a.A", "org.b.B")):
         from waypoint import restore
         from waypoint.model import Group, Item, Section
         apps = [Item(id=i, label=i, data={"id": i, "name": i, "origin": o, "installation": inst})
                 for i, o, inst in (("org.a.A", "flathub", "system"), ("org.b.B", "flathub", "system"),
-                                   ("org.c.C", "flathub", "user"))]
-        g = Group("flatpaks", "f", items=apps, data={"remotes": []})
-        calls = []
+                                   ("org.c.C", "flathub", "user"), ("org.d.D", "flathub", "user"))]
+        g = Group("flatpaks", "f", items=apps, data={"remotes": [
+            {"name": "flathub", "url": "https://dl.flathub.org/repo/", "installation": "system"}]})
+        calls, plans = [], []
 
         def stream(cmd, log):
             calls.append(cmd)
+            if "pkexec" in cmd:
+                plans.append(json.loads(Path(cmd[-1]).read_text()))
+                return 0, [f"@@OK {i}" for i in helper_ok]
             together = len([c for c in cmd if c.startswith("org.")]) > 1
             return (1 if (fail_together and together) else 0), []
 
         fake = mock.Mock(s=[Section("A", "", [g])], _stream=stream)
-        with mock.patch.object(restore.system, "flatpak_remotes", return_value=[]):
-            ok, _text = restore.Restorer.do_flatpaks(fake, lambda t: None)
-        return ok, calls
+        with mock.patch.object(restore.system, "flatpak_remotes", return_value=[]), \
+                mock.patch.object(restore.system, "package_manager", return_value="zypper"):
+            ok, text = restore.Restorer.do_flatpaks(fake, lambda t: None)
+        return ok, text, calls, plans
 
-    def test_grouped_and_interactive(self):
-        ok, calls = self._run(False)
+    def test_system_via_helper_user_direct(self):
+        ok, _text, calls, plans = self._run()
         self.assertTrue(ok)
-        self.assertEqual(calls, [["flatpak", "install", "-y", "--system", "flathub", "org.a.A", "org.b.B"],
-                                 ["flatpak", "install", "-y", "--user", "flathub", "org.c.C"]])
-        self.assertFalse(any("--noninteractive" in c for c in calls))
+        self.assertEqual(calls[0][0], "pkexec")
+        self.assertEqual(plans[0]["flatpaks"], [{"remote": "flathub", "id": "org.a.A"},
+                                                {"remote": "flathub", "id": "org.b.B"}])
+        self.assertEqual(plans[0]["flatpak_remotes"],
+                         [{"name": "flathub", "url": "https://dl.flathub.org/repo/flathub.flatpakrepo"}])
+        self.assertEqual(calls[1], ["flatpak", "install", "-y", "--noninteractive", "--user", "flathub",
+                                    "org.c.C", "org.d.D"])
+        self.assertFalse(any(c[0] == "flatpak" and "--system" in c for c in calls))
 
-    def test_one_at_a_time_after_failure(self):
-        ok, calls = self._run(True)
-        self.assertTrue(ok)
-        self.assertEqual(calls[1:3], [["flatpak", "install", "-y", "--system", "flathub", "org.a.A"],
-                                      ["flatpak", "install", "-y", "--system", "flathub", "org.b.B"]])
+    def test_failures_reported(self):
+        ok, text, calls, _plans = self._run(fail_together=True, helper_ok=("org.a.A",))
+        self.assertFalse(ok)
+        self.assertIn("org.b.B", text)
+        self.assertEqual(calls[2:], [["flatpak", "install", "-y", "--noninteractive", "--user", "flathub", "org.c.C"],
+                                     ["flatpak", "install", "-y", "--noninteractive", "--user", "flathub", "org.d.D"]])
+
+
+class HelperPlanTests(unittest.TestCase):
+    """Root-hjelperens plan, med run() byttet ut (ingen root): pakker og Flatpak for hele systemet."""
+
+    def _plan(self, plan, fail=()):
+        sys.path.insert(0, str(ROOT / "waypoint"))
+        import privileged
+        ran, said = [], []
+
+        def run(cmd):
+            ran.append(cmd)
+            return 1 if any(f in cmd for f in fail) else 0
+        with mock.patch.object(privileged, "run", run), mock.patch.object(privileged, "say", said.append), \
+                mock.patch("shutil.which", return_value="/usr/bin/flatpak"):
+            privileged.run_plan(plan)
+        return ran, said
+
+    def test_packages(self):
+        ran, said = self._plan({"manager": "zypper", "packages": ["htop", "--force"]})
+        self.assertIn(["zypper", "--non-interactive", "install", "--auto-agree-with-licenses", "--", "htop"], ran)
+        self.assertIn("@@OK htop", said)
+        self.assertIn("@@FAIL --force", said)
+
+    def test_flatpaks(self):
+        ran, said = self._plan({"manager": None,
+                                "flatpak_remotes": [{"name": "flathub",
+                                                     "url": "https://dl.flathub.org/repo/flathub.flatpakrepo"},
+                                                    {"name": "-x", "url": "https://evil"}],
+                                "flatpaks": [{"remote": "flathub", "id": "org.a.A"},
+                                             {"remote": "flathub", "id": "org.b.B"},
+                                             {"remote": "flathub", "id": "--installation=x"}]},
+                               fail=("org.b.B",))
+        self.assertEqual(ran[0], ["flatpak", "remote-add", "--system", "--if-not-exists", "--", "flathub",
+                                  "https://dl.flathub.org/repo/flathub.flatpakrepo"])
+        self.assertEqual(len([r for r in ran if "remote-add" in r]), 1)        # «-x» avvist
+        self.assertIn(["flatpak", "install", "--system", "-y", "--noninteractive", "--", "flathub",
+                       "org.a.A", "org.b.B"], ran)
+        self.assertEqual([s for s in said if s.startswith("@@")],
+                         ["@@STEP Installerer Flatpak-apper", "@@FAIL --installation=x", "@@OK org.a.A",
+                          "@@FAIL org.b.B"])
 
 
 class HomePathTests(unittest.TestCase):
@@ -870,7 +923,7 @@ class HelperTests2(unittest.TestCase):
             with mock.patch.object(privileged, "HELPER_PATH", str(helper)), \
                     mock.patch.object(privileged, "POLICY_PATH", str(policy)), \
                     mock.patch.object(privileged.os, "chown"), mock.patch.object(privileged, "say"):
-                self.assertEqual(privileged.install(), 0)
+                self.assertEqual(privileged.install_self(), 0)
             self.assertEqual(helper.read_bytes(), (ROOT / "waypoint/privileged.py").read_bytes())
             self.assertEqual(oct(helper.stat().st_mode & 0o777), "0o755")
             self.assertIn("org.freedesktop.policykit.exec.path", policy.read_text())
@@ -1370,6 +1423,39 @@ class UpdateWhileBusyTests(unittest.TestCase):
         result, inst = self._maybe_update()
         inst.assert_called_once()
         self.assertEqual(result, "v99.0.0")
+
+
+class UndefinedNameTests(unittest.TestCase):
+    """Enkel erstatning for pyflakes: et navn som leses et sted i en modul, må være definert et sted i den
+    (import, def, class, tilordning, parameter) eller være innebygd. Fanger f.eks. en konstant som er slettet."""
+
+    def test_no_undefined_names(self):
+        import ast
+        import builtins
+        known_extra = {"__file__", "__name__", "__doc__", "__spec__", "__loader__", "__builtins__"}
+        problems = []
+        for path in sorted((ROOT / "waypoint").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            defined = set(dir(builtins)) | known_extra
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    defined |= {(a.asname or a.name).split(".")[0] for a in node.names}
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    defined.add(node.name)
+                elif isinstance(node, ast.arg):
+                    defined.add(node.arg)
+                elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                    defined.add(node.id)
+                elif isinstance(node, ast.ExceptHandler) and node.name:
+                    defined.add(node.name)
+                elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                    defined |= set(node.names)
+                elif isinstance(node, ast.MatchAs) and node.name:
+                    defined.add(node.name)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in defined:
+                    problems.append(f"{path.relative_to(ROOT)}:{node.lineno}: {node.id}")
+        self.assertEqual(problems, [])
 
 
 class TranslationTests(unittest.TestCase):

@@ -27,7 +27,7 @@ import re
 import subprocess
 import sys
 
-HELPER_VERSION = 1
+HELPER_VERSION = 2
 HELPER_PATH = "/usr/local/libexec/waypoint/waypoint-privileged"
 POLICY_PATH = "/usr/share/polkit-1/actions/io.github.waypoint.Waypoint.policy"
 
@@ -61,7 +61,7 @@ POLICY = """<?xml version="1.0" encoding="UTF-8"?>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin</allow_active>
+      <allow_active>auth_admin_keep</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">%s</annotate>
   </action>
@@ -74,6 +74,8 @@ PACKAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*(:[A-Za-z0-9_-]+)?")
 ALIAS = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]*")
 URL = re.compile(r"(https?|ftp)://[^\s'\"]+")
 REPO_FILE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.repo")
+FLATPAK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")             # navn på en Flatpak-kilde
+FLATPAK_ID = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9_][A-Za-z0-9_-]*)+")   # org.example.App
 
 
 # Nøklene som skrives tilbake i en .repo-fil for dnf; alt annet i filen fra kopien droppes.
@@ -186,7 +188,7 @@ def _write(path, data, mode):
     os.replace(tmp, path)
 
 
-def install():
+def install_self():
     """Legger inn denne filen som HELPER_PATH og polkit-regelen. Bytene ble lest da filen startet (SELF)."""
     if not SELF.startswith(b"#!/usr/bin/python3") or b"HELPER_VERSION = " not in SELF:
         say("Cannot install the helper: unexpected content")
@@ -219,9 +221,9 @@ def main():
     if args == ["--uninstall"]:
         return uninstall()
     if args == ["--install"]:
-        return install()
+        return install_self()
     if len(args) == 2 and args[0] == "--install-and-run":
-        if install() != 0:
+        if install_self() != 0:
             return 1
         args = args[1:]
     if len(args) != 1 or args[0].startswith("-"):
@@ -230,12 +232,18 @@ def main():
         return 2
     with open(args[0]) as f:
         plan = json.load(f)
-    mgr = plan["manager"]
-    if mgr not in ("zypper", "dnf", "apt", "pacman"):
-        say("Unknown package manager: " + mgr)
+    return run_plan(plan)
+
+
+def run_plan(plan):
+    """Pakkekilder og pakker (plan["repos"], plan["packages"] for plan["manager"]), og Flatpak-apper for hele
+    systemet (plan["flatpaks"], plan["flatpak_remotes"])."""
+    mgr = plan.get("manager")
+    repos, pkgs = plan.get("repos", []), plan.get("packages", [])
+    if (repos or pkgs) and mgr not in ("zypper", "dnf", "apt", "pacman"):
+        say("Unknown package manager: " + repr(mgr))
         return 2
 
-    repos = plan.get("repos", [])
     if repos:
         say("@@STEP Legger til pakkekilder")
         added = []
@@ -272,12 +280,11 @@ def main():
         # spør ellers, og --non-interactive svarer nei). Nøkler fra rpm --import over er allerede godtatt.
         for alias in added:
             run(["zypper", "--non-interactive", "--gpg-auto-import-keys", "refresh", "--", alias])
-    if mgr == "apt":
+    if pkgs and mgr == "apt":
         run(["apt-get", "update"])
-    elif mgr == "pacman":
+    elif pkgs and mgr == "pacman":
         run(["pacman", "-Sy", "--noconfirm"])
 
-    pkgs = plan.get("packages", [])
     bad = [p for p in pkgs if not (isinstance(p, str) and PACKAGE.fullmatch(p))]
     for p in bad:
         say("Skipping unexpected package name: " + repr(p))
@@ -286,7 +293,46 @@ def main():
     if pkgs:
         say("@@STEP Installerer pakker")
         install(mgr, pkgs)
+    install_flatpaks(plan.get("flatpak_remotes", []), plan.get("flatpaks", []))
     return 0
+
+
+def install_flatpaks(remotes, apps):
+    """Flatpak for hele systemet, som root: da trengs ingen egen polkit-forespørsel fra Flatpak (som ikke får spurt
+    når den startes fra et vindu uten terminal, og ellers avviser alt med «Deploy not allowed for user»)."""
+    if not apps:
+        return
+    import shutil
+    say("@@STEP Installerer Flatpak-apper")
+    if not shutil.which("flatpak"):
+        say("flatpak is not installed")
+        for a in apps:
+            say("@@FAIL " + str(a.get("id") if isinstance(a, dict) else a))
+        return
+    for r in remotes:
+        name, url = r.get("name", ""), r.get("url", "")
+        if not (FLATPAK_NAME.fullmatch(name) and URL.fullmatch(url)):
+            say("Skipping Flatpak remote with an unexpected name or address: " + repr(name))
+            continue
+        run(["flatpak", "remote-add", "--system", "--if-not-exists", "--", name, url])
+    groups = {}
+    for a in apps:
+        remote, app = (a.get("remote", ""), a.get("id", "")) if isinstance(a, dict) else ("", "")
+        if not (FLATPAK_NAME.fullmatch(remote) and FLATPAK_ID.fullmatch(app)):
+            say("Skipping unexpected Flatpak app: " + repr(a))
+            say("@@FAIL " + str(app))
+            continue
+        groups.setdefault(remote, []).append(app)
+    for remote, ids in groups.items():
+        base = ["flatpak", "install", "--system", "-y", "--noninteractive", "--", remote]
+        if run(base + ids) == 0:
+            for i in ids:
+                say("@@OK " + i)
+            continue
+        if len(ids) > 1:
+            say("Some apps could not be installed together – trying one at a time.")
+        for i in ids:
+            say(("@@OK " if len(ids) > 1 and run(base + [i]) == 0 else "@@FAIL ") + i)
 
 
 if __name__ == "__main__":

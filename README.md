@@ -88,12 +88,11 @@ files kept from restores are left alone, so you can install Waypoint again and g
 
 * **Updates** are downloaded over HTTPS from the releases on GitHub. Waypoint checks that the download is the
   version it asked for and contains no links or paths outside its folder, but releases are not signed.
-* **Installing packages during a restore** needs root. This is done by a small helper in
-  `/usr/local/libexec/waypoint/waypoint-privileged`, owned by root, with its own polkit action, so the password
-  dialog says what it is for and no program running as you can replace it while waiting for your password. The
-  first time packages are installed (and when a new version of Waypoint changes the helper), Waypoint installs the
-  helper and the packages in one step, with one password prompt. `install.sh` installs it too when run in a
-  terminal.
+* **Installing packages and Flatpak apps for all users during a restore** needs root. This is done by a small
+  helper in `/usr/local/libexec/waypoint/waypoint-privileged`, owned by root, with its own polkit action, so the
+  password dialog says what it is for and no program running as you can replace it while waiting for your password.
+  The first time it is needed (and when a new version of Waypoint changes the helper), Waypoint installs the helper
+  and the packages in one step, with one password prompt. `install.sh` installs it too when run in a terminal.
 * **Repositories from a backup** are never selected in advance, and you see the full address (for dnf, the whole
   repository file as it will be written). dnf files with more than one repository or with signature checks turned
   off are skipped, and zypper only trusts signing keys for repositories you chose.

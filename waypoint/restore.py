@@ -22,6 +22,7 @@ from .model import Group, Item, Section, find_group
 from .system import HOME, USER_EXT_DIR
 
 PRIVILEGED = Path(__file__).with_name("privileged.py")   # kilden; install.sh legger den inn som HELPER (root-eid)
+EGO = "https://extensions.gnome.org"
 
 
 def helper() -> Path:
@@ -389,43 +390,69 @@ class Restorer:
         g = find_group(self.s, "flatpaks")
         apps = g.selected()
         existing = {(r["name"], r["installation"]) for r in system.flatpak_remotes()}
+        remotes = []   # kilder som må legges til: (navn, adresse, installasjon)
         for r in g.data.get("remotes", []):
             if (r["name"], r["installation"]) in existing or r["name"] not in {a.data["origin"] for a in apps}:
                 continue
             url = r["url"]
             if "flathub" in r["name"] or "dl.flathub.org" in url:
                 url = "https://dl.flathub.org/repo/flathub.flatpakrepo"
-            log(_("Legger til Flatpak-kilden {}").format(r["name"]))
-            self._stream(["flatpak", "remote-add", "--if-not-exists", f"--{r['installation']}", r["name"], url], log)
-        # Samlet per installasjon og kilde, så en systeminstallasjon bare ber om administratorpassordet én gang
-        # (polkit husker det en stund). Ikke --noninteractive: da får Flatpak ikke spørre polkit om passordet, og
-        # alt som skal installeres for hele systemet avvises («Deploy not allowed for user»). -y svarer ja på
-        # Flatpak sine egne spørsmål.
-        groups: dict[tuple[str, str], list] = {}
-        for a in apps:
-            groups.setdefault((a.data["installation"], a.data["origin"]), []).append(a)
+            remotes.append((r["name"], url, r["installation"]))
         ok, failed = 0, []
-        for (installation, origin), members in groups.items():
-            base = ["flatpak", "install", "-y", f"--{installation}", origin]
-            names = ", ".join(a.data["name"] for a in members)
-            log(_("Installerer {} fra {}").format(names, origin))
-            if installation == "system":
-                log(_("Flatpak ber om administratorpassordet for å installere for alle brukere"))
+        by_id = {a.data["id"]: a.data["name"] for a in apps}
+
+        # For hele systemet: root-hjelperen installerer dem (samme passordvindu som pakkene). Flatpak selv får ikke
+        # spurt polkit om passordet når den startes fra et vindu uten terminal, og avviser da alt med
+        # «Flatpak system operation Deploy not allowed for user».
+        sys_apps = [a for a in apps if a.data["installation"] == "system"]
+        if sys_apps:
+            plan = {"manager": system.package_manager(),
+                    "flatpak_remotes": [{"name": n, "url": u} for n, u, inst in remotes if inst == "system"],
+                    "flatpaks": [{"remote": a.data["origin"], "id": a.data["id"]} for a in sys_apps]}
+            log(_("Installerer {} for alle brukere").format(", ".join(a.data["name"] for a in sys_apps)))
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+                json.dump(plan, f)
+            try:
+                log(_("Ber om administratorpassord …"))
+                if not helper_ready():
+                    log(_("Legger også inn hjelperen som installerer pakker (bare første gang)"))
+                code, lines = self._stream(helper_command(f.name), log)
+            finally:
+                os.unlink(f.name)
+            done = {line[5:] for line in lines if line.startswith("@@OK ")}
+            if code in (126, 127) and not any(line.startswith("@@") for line in lines):
+                log(_("Avbrutt – administratorpassordet ble ikke gitt"))
+            for a in sys_apps:
+                if a.data["id"] in done:
+                    ok += 1
+                else:
+                    failed.append(by_id[a.data["id"]])
+
+        # For brukeren: Flatpak direkte, uten administratorpassord. Samlet per kilde, én og én som reserve.
+        for name, url, inst in remotes:
+            if inst == "user":
+                log(_("Legger til Flatpak-kilden {}").format(name))
+                self._stream(["flatpak", "remote-add", "--if-not-exists", "--user", name, url], log)
+        groups: dict[str, list] = {}
+        for a in apps:
+            if a.data["installation"] != "system":
+                groups.setdefault(a.data["origin"], []).append(a)
+        for origin, members in groups.items():
+            base = ["flatpak", "install", "-y", "--noninteractive", "--user", origin]
+            log(_("Installerer {} fra {}").format(", ".join(a.data["name"] for a in members), origin))
             code, _lines = self._stream(base + [a.data["id"] for a in members], log)
             if code == 0:
                 ok += len(members)
                 continue
             if len(members) > 1:
                 log(_("Ikke alle kunne installeres samtidig – prøver én om gangen"))
-            for n, a in enumerate(members, 1):
-                d = a.data
+            for a in members:
                 if len(members) > 1:
-                    log(_("[{}/{}] Installerer {} ({})").format(n, len(members), d["name"], d["id"]))
-                    code, _lines = self._stream(base + [d["id"]], log)
+                    code, _lines = self._stream(base + [a.data["id"]], log)
                 if code == 0:
                     ok += 1
                 else:
-                    failed.append(d["name"])
+                    failed.append(a.data["name"])
         text = _("{} av {} apper installert").format(ok, len(apps))
         if failed:
             text += " · " + _("feilet: {}").format(", ".join(failed))
