@@ -1085,6 +1085,14 @@ class Window(Adw.ApplicationWindow):
         row.add_prefix(Gtk.Image(icon_name="channel-secure-symbolic" if b.encrypted_all else "package-x-generic-symbolic"))
         src.add(row)
         box.append(src)
+        other = restore.distro_mismatch(b.manifest)
+        if other:
+            warn = Adw.ActionRow(title=_("Annen distribusjon"), subtitle=other, use_markup=False)
+            warn.set_subtitle_lines(0)
+            warn.add_prefix(Gtk.Image(icon_name="dialog-information-symbolic"))
+            notice = Adw.PreferencesGroup()
+            notice.add(warn)
+            box.append(notice)
         box.append(label(_("Det som allerede finnes på denne maskinen, er ikke valgt. Programmer installeres fra "
                            "nettet, så maskinen må være koblet til internett."), ("dim-label",), wrap=True))
         for w in Chooser(sections, update).build():

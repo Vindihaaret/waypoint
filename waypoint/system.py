@@ -56,7 +56,7 @@ def os_release() -> dict:
         except OSError:
             continue
     return {"id": info.get("ID", "linux"), "name": info.get("PRETTY_NAME") or info.get("NAME", "Linux"),
-            "like": info.get("ID_LIKE", "")}
+            "like": info.get("ID_LIKE", ""), "version": info.get("VERSION_ID", "")}
 
 
 def package_manager() -> str | None:
@@ -129,6 +129,35 @@ def user_packages(mgr: str | None) -> list[dict]:
         if not _is_noise(n):
             result.append({"name": n, "summary": summaries.get(n, "")})
     return result
+
+
+def available_packages(mgr: str | None, names: list[str]) -> set[str] | None:
+    """Hvilke av names som finnes i pakkekildene på denne maskinen (installert eller ikke), eller None hvis
+    pakkesystemet ikke kunne spørres (da vet vi ikke, og ingenting bør gråes ut av den grunn)."""
+    names = [n for n in names if n and not n.startswith("-")]
+    if not names or not mgr:
+        return set()
+    if mgr == "zypper":
+        # 104: ingen treff. Uten root brukes de nedlastede kildene som de er.
+        code, xml, _err = run(["zypper", "--non-interactive", "--no-refresh", "-x", "search", "--match-exact",
+                               "-t", "package", "--", *names], 120)
+        if code not in (0, 104):
+            return None
+        try:
+            root = ET.fromstring(xml)
+        except ET.ParseError:
+            return None
+        return {s.get("name", "") for s in root.iter("solvable")} & set(names)
+    if mgr == "dnf":
+        code, text, _err = run(["dnf", "repoquery", "--quiet", "--qf", "%{name}\n", "--", *names], 300)
+        return set(text.split()) & set(names) if code == 0 else None
+    if mgr == "apt":
+        code, text, _err = run(["apt-cache", "pkgnames"], 120)
+        return set(text.split()) & set(names) if code == 0 else None
+    if mgr == "pacman":
+        code, text, _err = run(["pacman", "-Slq"], 120)
+        return set(text.split()) & set(names) if code == 0 else None
+    return None
 
 
 def installed_packages(mgr: str | None) -> set[str]:

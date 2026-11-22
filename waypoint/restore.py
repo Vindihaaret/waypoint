@@ -240,17 +240,35 @@ class BackupFile:
         pk = m.get("packages")
         if pk and pk.get("items"):
             same = pk.get("manager") == mgr
-            installed = system.installed_packages(mgr) if same else set()
+            installed = system.installed_packages(mgr)
+            # Hvilke navn finnes i pakkekildene her? Med samme pakkesystem (også en annen versjon av distribusjonen)
+            # velges bare de som finnes; resten kan velges for hånd (de kan komme fra en pakkekilde over). Med et
+            # annet pakkesystem kan bare navn som finnes her velges, og ingen er valgt på forhånd.
+            found = system.available_packages(mgr, [p["name"] for p in pk["items"] if p["name"] not in installed])
+            here_name = system.os_release().get("name") or _("denne maskinen")
             g = Group("packages", _("Systempakker"), icon="system-software-install-symbolic",
                       subtitle=_("Fra {}").format(system.PM_NAMES.get(pk.get("manager"), "?")))
             for p in pk["items"]:
-                here = p["name"] in installed
-                g.items.append(Item(id=p["name"], label=p["name"],
-                                    detail=_("Installert") if here else p.get("summary", ""),
-                                    available=same and not here, selected=same and not here, data=p))
+                name = p["name"]
+                here = name in installed
+                exists = found is None or name in found
+                if here:
+                    detail, available, selected = _("Installert"), False, False
+                elif same:
+                    available, selected = True, exists
+                    detail = p.get("summary", "") if exists else \
+                        _("Finnes ikke i pakkekildene her – kanskje i en av pakkekildene over")
+                else:
+                    available = selected = False
+                    detail = _("Finnes ikke på {}").format(here_name)
+                    if found is not None and name in found:
+                        available, detail = True, _("Finnes også her") + (" · " + p["summary"] if p.get("summary")
+                                                                          else "")
+                g.items.append(Item(id=name, label=name, detail=detail, available=available, selected=selected,
+                                    data=p))
             if not same:
-                g.note = _("Pakkenavnene er fra en annen distribusjon og kan ikke installeres automatisk her. "
-                           "Bruk listen som huskeliste.")
+                g.note = _("Pakkenavnene er fra en annen distribusjon. Pakker med samme navn som finnes her, kan "
+                           "velges – kontroller at de er det du vil ha. Resten kan brukes som huskeliste.")
             apps.groups.append(g)
         fp = m.get("flatpaks")
         if fp and fp.get("items"):
@@ -289,6 +307,33 @@ class BackupFile:
 
 def _norm(url: str) -> str:
     return url.strip().rstrip("/").replace("http://", "https://")
+
+
+# Waypoint sin egen installasjon i hjemmemappen (install.sh, tray.sync_autostart). Den legges aldri tilbake fra en
+# kopi: filene der peker på hjemmemappen kopien ble tatt i (f.eks. /home/ola/.local/bin/waypoint), og ville erstattet
+# installasjonen som kjører – da forsvinner Waypoint fra appoversikten for en bruker med et annet navn.
+OWN_INSTALL = (".local/bin/waypoint", ".local/share/waypoint/app",
+               ".local/share/applications/io.github.waypoint.Waypoint.desktop",
+               ".config/autostart/io.github.waypoint.Waypoint-tray.desktop",
+               ".local/share/icons/hicolor/scalable/apps/io.github.waypoint.Waypoint.svg",
+               ".local/share/icons/hicolor/symbolic/apps/io.github.waypoint.Waypoint-symbolic.svg",
+               ".config/systemd/user/waypoint-auto.service", ".config/systemd/user/waypoint-auto.timer")
+
+
+def own_install(rel: str) -> bool:
+    rel = rel.strip("/")
+    return any(rel == p or rel.startswith(p + "/") for p in OWN_INSTALL)
+
+
+def distro_mismatch(manifest: dict | None) -> str | None:
+    """En forklaring når kopien er tatt på en annen distribusjon enn denne maskinen, ellers None."""
+    old = (manifest or {}).get("distro") or {}
+    here = system.os_release()
+    if not old.get("id") or old.get("id") == here.get("id"):
+        return None
+    return _("Kopien er fra {}, denne maskinen kjører {}. Systempakker og pakkekilder kan ikke tas med direkte – "
+             "pakker med samme navn som finnes her, kan velges. Flatpak-apper, utvidelser, innstillinger og filer "
+             "virker som vanlig.").format(old.get("name") or old["id"], here.get("name") or here.get("id"))
 
 
 def _safe_name(name: str) -> bool:
@@ -465,6 +510,9 @@ class Restorer:
                 continue
             rel = m.name[5:]
             if not _safe_name(rel) or not any(rel == w or rel.startswith(w + "/") for w in wanted):
+                continue
+            if own_install(rel):
+                log(_("Hopper over {} (hører til Waypoint-installasjonen her)").format("~/" + rel))
                 continue
             if m.islnk():
                 # Hardlenker peker på et annet medlem i arkivet; det navnet må skrives om på samme måte, og målet
@@ -673,7 +721,13 @@ def fix_home_paths(old_home: str, log=lambda t: None):
     """Etter at filene er lagt tilbake: bokmerkene i Filer og standardmappene (Dokumenter, Nedlastinger …) peker
     på den nye hjemmemappen, og standardmapper som mangler, opprettes. Ellers viser Filer dem med varseltegn og
     «Unable to find …» (f.eks. når brukernavnet er et annet, eller de personlige mappene ikke ble valgt)."""
-    for rel in (".config/gtk-3.0/bookmarks", ".config/user-dirs.dirs"):
+    rels = [".config/gtk-3.0/bookmarks", ".config/user-dirs.dirs"]
+    for folder in (".local/share/applications", ".config/autostart"):   # egne snarveier med full sti
+        try:
+            rels += [f"{folder}/{p.name}" for p in (HOME / folder).glob("*.desktop") if p.is_file()]
+        except OSError:
+            pass
+    for rel in rels:
         f = HOME / rel
         try:
             text = f.read_text(encoding="utf-8")
@@ -723,13 +777,18 @@ def unique_name(dest: Path, stamp: str) -> Path:
 
 
 def place(src_root: Path, dest_root: Path, undo_dir: Path | None, log=lambda t: None,
-          keep_both_suffix: str | None = None) -> dict:
+          keep_both_suffix: str | None = None, skip=lambda rel: False) -> dict:
     """Flytter alt under src_root inn under dest_root. Det som ligger der fra før, flyttes til undo_dir
     (eller, med keep_both_suffix, får den nye kopien et eget navn). Returnerer antall filer og flyttede."""
     counts = {"files": 0, "moved": 0}
     for dirpath, dirnames, filenames in os.walk(src_root):
         rel_dir = Path(dirpath).relative_to(src_root)
-        for name in dirnames + filenames:
+        for name in list(dirnames) + filenames:
+            if skip(str(rel_dir / name)):
+                log(_("Hopper over {} (hører til Waypoint-installasjonen her)").format("~/" + str(rel_dir / name)))
+                if name in dirnames:
+                    dirnames.remove(name)
+                continue
             src = Path(dirpath) / name
             if src.is_dir() and not src.is_symlink():
                 d = dest_root / rel_dir / name
@@ -841,7 +900,7 @@ class SnapshotBackup:
             src = tmp / old_home.lstrip("/")
             # restic melder suksess også når et mønster ikke traff noe; sjekk at hvert valgt element faktisk kom.
             missing = [r for r in rels if not ((src / r).exists() or (src / r).is_symlink())]
-            counts = place(src, HOME, undo_dir, log) if src.exists() else {"files": 0, "moved": 0}
+            counts = place(src, HOME, undo_dir, log, skip=own_install) if src.exists() else {"files": 0, "moved": 0}
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         text = _("{} filer og mapper lagt tilbake").format(counts["files"])

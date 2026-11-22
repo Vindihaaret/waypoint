@@ -624,6 +624,116 @@ class DebugLogTests(unittest.TestCase):
             self.assertEqual(oct(rl.path.stat().st_mode & 0o777), "0o600")
 
 
+class OwnInstallTests(unittest.TestCase):
+    """Waypoint sin egen installasjon legges aldri tilbake fra en kopi, og snarveier får ny hjemmemappe."""
+
+    def test_own_install(self):
+        from waypoint.restore import own_install
+        for rel in (".local/bin/waypoint", ".local/share/waypoint/app/waypoint/app.py",
+                    ".local/share/applications/io.github.waypoint.Waypoint.desktop"):
+            self.assertTrue(own_install(rel), rel)
+        for rel in (".local/bin/annet", ".local/share/applications/org.example.App.desktop",
+                    ".local/share/waypoint/replaced/x", ".local/bin/waypoint-ekstra"):
+            self.assertFalse(own_install(rel), rel)
+
+    def test_place_skips_own_install(self):
+        from waypoint.restore import own_install, place
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dst:
+            for rel, text in ((".local/bin/waypoint", "fra kopien"), (".local/bin/annet", "annet"),
+                              (".local/share/waypoint/app/x.py", "gammel kode")):
+                Path(src, rel).parent.mkdir(parents=True, exist_ok=True)
+                Path(src, rel).write_text(text)
+            Path(dst, ".local/bin").mkdir(parents=True)
+            Path(dst, ".local/bin/waypoint").write_text("installert her")
+            place(Path(src), Path(dst), Path(dst, "undo"), skip=own_install)
+            self.assertEqual(Path(dst, ".local/bin/waypoint").read_text(), "installert her")
+            self.assertEqual(Path(dst, ".local/bin/annet").read_text(), "annet")
+            self.assertFalse(Path(dst, ".local/share/waypoint/app").exists())
+
+    def test_extract_skips_own_install(self):
+        import io
+        import tarfile
+        from waypoint import restore
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            for name, data in (("home/.local/bin/waypoint", b"fra kopien"), ("home/.local/bin/annet", b"annet")):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                t.addfile(info, io.BytesIO(data))
+        buf.seek(0)
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(restore, "HOME", Path(home)):
+            Path(home, ".local/bin").mkdir(parents=True)
+            Path(home, ".local/bin/waypoint").write_text("installert her")
+            fake = mock.Mock(undo_dir=Path(home, "undo"))
+            restore.Restorer._extract(fake, tarfile.open(fileobj=buf, mode="r|"), [".local/bin"],
+                                      {"files": 0, "moved": 0}, lambda t: None)
+            self.assertEqual(Path(home, ".local/bin/waypoint").read_text(), "installert her")
+            self.assertEqual(Path(home, ".local/bin/annet").read_text(), "annet")
+
+    def test_desktop_files_get_new_home(self):
+        from waypoint import restore
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(restore, "HOME", Path(home)):
+            apps = Path(home, ".local/share/applications")
+            apps.mkdir(parents=True)
+            Path(apps, "egen.desktop").write_text("[Desktop Entry]\nExec=/home/ola/.local/bin/egen\n"
+                                                  "Icon=/home/ola/.local/share/icons/egen.png\n")
+            restore.fix_home_paths("/home/ola")
+            text = Path(apps, "egen.desktop").read_text()
+            self.assertIn(f"Exec={home}/.local/bin/egen", text)
+            self.assertIn(f"Icon={home}/.local/share/icons/egen.png", text)
+
+
+class OtherDistroTests(unittest.TestCase):
+    """Gjenoppretting til en annen distribusjon (eller en annen versjon av samme): pakker som ikke finnes her, gråes
+    ut eller velges ikke, pakker med samme navn kan velges, og et banner forklarer det."""
+
+    def _packages(self, manager_here, found, installed=()):
+        from waypoint import restore
+        manifest = {"app": "waypoint", "distro": {"id": "opensuse-tumbleweed", "name": "openSUSE Tumbleweed"},
+                    "packages": {"manager": "zypper", "items": [
+                        {"name": "htop", "summary": "Prosesser"}, {"name": "vlc-codecs"},
+                        {"name": "libxkbcommon-compat"}, {"name": "git"}]}}
+        fake = mock.Mock(manifest=manifest, encrypted_all=False, staging=Path("/finnes/ikke"))
+        with mock.patch.object(restore.system, "package_manager", return_value=manager_here), \
+                mock.patch.object(restore.system, "installed_packages", return_value=set(installed)), \
+                mock.patch.object(restore.system, "available_packages", return_value=found), \
+                mock.patch.object(restore.system, "os_release", return_value={"id": "fedora", "name": "Fedora 43"}), \
+                mock.patch.object(restore.system, "flatpak_apps", return_value=[]), \
+                mock.patch.object(restore.system, "repositories", return_value=[]):
+            secs = restore.BackupFile.sections(fake)
+        from waypoint.model import find_group
+        return {i.id: i for i in find_group(secs, "packages").items}
+
+    def test_other_package_manager(self):
+        items = self._packages("dnf", {"htop", "git"}, installed={"git"})
+        self.assertTrue(items["htop"].available)
+        self.assertFalse(items["htop"].selected)                 # aldri valgt på forhånd
+        self.assertFalse(items["vlc-codecs"].available)          # finnes ikke på Fedora
+        self.assertFalse(items["git"].available)                 # allerede installert
+        self.assertIn("Fedora 43", items["vlc-codecs"].detail)
+
+    def test_same_manager_other_version(self):
+        items = self._packages("zypper", {"htop", "git", "vlc-codecs"})
+        self.assertTrue(items["htop"].selected)
+        self.assertTrue(items["libxkbcommon-compat"].available)  # kan komme fra en pakkekilde i kopien
+        self.assertFalse(items["libxkbcommon-compat"].selected)  # men velges ikke, så den ikke feiler
+
+    def test_query_failed(self):
+        items = self._packages("zypper", None)                   # vet ikke: alt som før
+        self.assertTrue(all(i.selected for i in items.values()))
+        items = self._packages("dnf", None)                      # annet pakkesystem og vet ikke: ingenting
+        self.assertFalse(any(i.available for i in items.values()))
+
+    def test_distro_mismatch(self):
+        from waypoint import restore
+        with mock.patch.object(restore.system, "os_release", return_value={"id": "fedora", "name": "Fedora 43"}):
+            text = restore.distro_mismatch({"distro": {"id": "opensuse-tumbleweed", "name": "openSUSE Tumbleweed"}})
+            self.assertIn("openSUSE Tumbleweed", text)
+            self.assertIn("Fedora 43", text)
+            self.assertIsNone(restore.distro_mismatch({"distro": {"id": "fedora", "name": "Fedora 42"}}))
+            self.assertIsNone(restore.distro_mismatch({}))
+
+
 class ResticPrepTests(unittest.TestCase):
     def test_exclude_patterns(self):
         from waypoint import backup
