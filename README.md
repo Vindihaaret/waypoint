@@ -71,8 +71,7 @@ cd waypoint
 
 `install.sh` installs Waypoint in your home folder (`~/.local`) and adds it to the app overview. If something Waypoint
 needs is missing, it is installed first with your package manager (zypper, dnf, apt or pacman), and `sudo` asks for
-your password. It also installs a small root-owned helper that installs packages during a restore (see
-[Security](#security)). Waypoint needs Python 3.10.12+ (or 3.11.4+), PyGObject, GTK 4.12+, libadwaita 1.6+,
+your password. Waypoint needs Python 3.10.12+ (or 3.11.4+), PyGObject, GTK 4.12+, libadwaita 1.6+,
 libsecret, restic, gpg (for exported files), dconf (for GNOME settings) and GVfs with SMB, SFTP and FUSE (for a
 NAS).
 
@@ -89,15 +88,24 @@ files kept from restores are left alone, so you can install Waypoint again and g
 
 * **Updates** are downloaded over HTTPS from the releases on GitHub. Waypoint checks that the download is the
   version it asked for and contains no links or paths outside its folder, but releases are not signed.
-* **Installing packages during a restore** needs root. This is done by a small helper that `install.sh` puts in
+* **Installing packages during a restore** needs root. This is done by a small helper in
   `/usr/local/libexec/waypoint/waypoint-privileged`, owned by root, with its own polkit action, so the password
-  dialog says what it is for and no program running as you can replace the helper. Updates from the app run without
-  `sudo` and cannot update it; when the helper changes, Waypoint asks you to run `./install.sh` again from a terminal.
+  dialog says what it is for and no program running as you can replace it while waiting for your password. The
+  first time packages are installed (and when a new version of Waypoint changes the helper), Waypoint installs the
+  helper and the packages in one step, with one password prompt. `install.sh` installs it too when run in a
+  terminal.
 * **Repositories from a backup** are never selected in advance, and you see the full address (for dnf, the whole
   repository file as it will be written). dnf files with more than one repository or with signature checks turned
   off are skipped, and zypper only trusts signing keys for repositories you chose.
 * **Encrypted backups** are checked for changes when they are restored: if gpg reports that the file was damaged or
   altered, the restore says so.
+
+## Troubleshooting
+
+Every restore is logged to `~/.local/state/waypoint/logs/restore-<time>.log`; *Show the log* opens it when the
+restore is done. For everything else, turn on *Settings → General → Debug log*: all of Waypoint (the window, the
+system tray icon and the automatic backups) then writes what it does – commands, their output and errors – to
+`~/.local/state/waypoint/logs/waypoint-<date>.log`. Passwords are never written, and logs are deleted after 14 days.
 
 ## How it works
 

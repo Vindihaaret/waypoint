@@ -44,6 +44,11 @@ def in_thread(work, done, *args):
     threading.Thread(target=runner, daemon=True).start()
 
 
+def open_uri(uri: str, parent: Gtk.Window | None = None):
+    """Åpner en fil eller mappe i standardprogrammet (tekstredigering, Filer)."""
+    Gtk.FileLauncher.new(Gio.File.new_for_uri(uri)).launch(parent, None, None, None)
+
+
 def set_class(widget: Gtk.Widget, name: str, on: bool):
     if on:
         widget.add_css_class(name)
@@ -1120,8 +1125,10 @@ class Window(Adw.ApplicationWindow):
         return page(_("Velg hva som skal tilbake"), scrolled(box), bottom_bar(summary, btn))
 
     def run_restore(self, b: restore.BackupFile, sections: list[Section]):
+        from . import debuglog
         self.restorer = r = restore.Restorer(b, sections)
         steps = r.steps()
+        rlog = debuglog.RestoreLog()   # hele loggen lagres alltid, så den kan leses etterpå
         box = vbox(24, 24)
         head = vbox(6)
         title = label(_("Gjenoppretter …"), ("title-1",), xalign=0.5)
@@ -1172,6 +1179,10 @@ class Window(Adw.ApplicationWindow):
         cancel.connect("clicked", on_cancel)
 
         def log(text):
+            rlog.write(text)
+            if text:
+                debuglog.debug("restore: %s", text)
+
             def add():
                 buf.insert(buf.get_end_iter(), text + "\n")
                 if exp.get_expanded():
@@ -1198,8 +1209,12 @@ class Window(Adw.ApplicationWindow):
                 try:
                     ok, text = st.func(log)
                 except Exception as e:  # noqa: BLE001
+                    import traceback
                     ok, text = False, _("Feil: {}").format(e)
                     log(text)
+                    rlog.write(traceback.format_exc())
+                    debuglog.error("restore step %s failed", st.id, exc=True)
+                log(("✔ " if ok else "✘ ") + f"{st.title}: {text}")
                 GLib.idle_add(set_state, st.id, "ok" if ok else "fail", text)
                 results.append(ok)
             return results
@@ -1208,6 +1223,14 @@ class Window(Adw.ApplicationWindow):
             self.busy = False
             pg.set_can_pop(True)
             btns.remove(cancel)
+            if err:
+                rlog.write(_("Feil: {}").format(err))
+            rlog.close()
+            if rlog.path:
+                show_log = pill(_("Vis loggen"), suggested=False)
+                show_log.set_tooltip_text(str(rlog.path))
+                show_log.connect("clicked", lambda *_a: open_uri(rlog.path.as_uri(), self))
+                btns.append(show_log)
             failed = [x for x in (results or []) if x is False]
             if err or self.cancel_flag:
                 title.set_label(_("Gjenopprettingen ble avbrutt"))

@@ -510,6 +510,67 @@ class SizeLimitTests(unittest.TestCase):
             self.assertEqual(len(list(Path(d).iterdir())), 2)
 
 
+class DebugLogTests(unittest.TestCase):
+    """Feilsøkingsloggen: bare når den er slått på, aldri passord, gamle logger ryddes."""
+
+    def _env(self, home):
+        return mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": home + "/c", "XDG_STATE_HOME": home + "/s"})
+
+    def test_redact(self):
+        from waypoint import debuglog
+        debuglog.add_secret("hemmelig-passord-123")
+        text = debuglog.redact("RESTIC_PASSWORD hemmelig-passord-123 smb://ola:pw42@nas/backup password=abc")
+        self.assertNotIn("hemmelig-passord-123", text)
+        self.assertNotIn("pw42", text)
+        self.assertNotIn("abc", text)
+        self.assertIn("smb://ola:" + debuglog.MASK + "@nas/backup", text)
+
+    def test_only_when_enabled(self):
+        from waypoint import debuglog, settings
+        with tempfile.TemporaryDirectory() as home, self._env(home):
+            debuglog.setup("test")
+            debuglog.refresh()
+            debuglog.debug("skal ikke skrives")
+            self.assertEqual(list(debuglog.log_dir().glob("waypoint-*.log")) if debuglog.log_dir().exists() else [],
+                             [])
+            settings.set("debug", True)
+            debuglog.refresh()
+            debuglog.add_secret("superhemmelig99")
+            debuglog.command(["restic", "snapshots"], 0, "ok", "feil med superhemmelig99")
+            debuglog.tee(lambda t: None)("melding fra en kopi")
+            logs = list(debuglog.log_dir().glob("waypoint-*.log"))
+            self.assertEqual(len(logs), 1)
+            text = logs[0].read_text()
+            self.assertIn("$ restic snapshots  → exit 0", text)
+            self.assertIn("melding fra en kopi", text)
+            self.assertNotIn("superhemmelig99", text)
+            self.assertEqual(oct(debuglog.log_dir().stat().st_mode & 0o777), "0o700")
+            settings.set("debug", False)
+            debuglog.refresh()
+
+    def test_cleanup_and_restore_log(self):
+        import time
+        from waypoint import debuglog
+        with tempfile.TemporaryDirectory() as home, self._env(home):
+            d = debuglog.log_dir()
+            d.mkdir(parents=True)
+            old, new = d / "waypoint-2020-01-01.log", d / "waypoint-ny.log"
+            old.write_text("x")
+            new.write_text("y")
+            os.utime(old, (time.time() - 30 * 86400,) * 2)
+            debuglog.cleanup()
+            self.assertFalse(old.exists())
+            self.assertTrue(new.exists())
+            rl = debuglog.RestoreLog()        # alltid, også uten feilsøkingsmodus
+            debuglog.add_secret("passordet-mitt")
+            rl.write("steg 1 med passordet-mitt")
+            rl.close()
+            text = rl.path.read_text()
+            self.assertIn("steg 1 med", text)
+            self.assertNotIn("passordet-mitt", text)
+            self.assertEqual(oct(rl.path.stat().st_mode & 0o777), "0o600")
+
+
 class ResticPrepTests(unittest.TestCase):
     def test_exclude_patterns(self):
         from waypoint import backup
@@ -771,33 +832,49 @@ print(sent)
 
 
 class HelperTests2(unittest.TestCase):
-    """M1: pakker installeres bare med den root-eide hjelperen, aldri med en fil i hjemmemappen."""
+    """M1: pakker installeres av den root-eide hjelperen. Mangler den, legger appens kopi den inn selv (ett
+    passordvindu), og etterpå kjøres aldri en fil fra hjemmemappen som root."""
 
-    def test_helper_problem(self):
+    def test_helper_ready_and_command(self):
         from waypoint import restore
         from waypoint.privileged import HELPER_VERSION
         with tempfile.TemporaryDirectory() as d:
             fake = Path(d, "waypoint-privileged")
             with mock.patch.dict(os.environ, {"WAYPOINT_HELPER": str(fake)}):
-                missing = restore.helper_problem()
-                self.assertIn("install.sh", missing)                           # mangler
+                self.assertFalse(restore.helper_ready())                                 # mangler
+                self.assertEqual(restore.helper_command("/tmp/plan.json"),
+                                 ["pkexec", "/usr/bin/python3", "-I", str(restore.PRIVILEGED), "--install-and-run",
+                                  "/tmp/plan.json"])
                 fake.write_text(f"HELPER_VERSION = {HELPER_VERSION}\n")
                 self.assertEqual(restore.helper_version(fake), HELPER_VERSION)
-                self.assertIn("install.sh", restore.helper_problem())          # eid av brukeren, ikke root
-                root_stat = mock.Mock(st_uid=0)
-                with mock.patch.object(Path, "stat", return_value=root_stat):
-                    self.assertIsNone(restore.helper_problem())                # root-eid og oppdatert
+                self.assertFalse(restore.helper_ready())                                 # eid av brukeren
+                with mock.patch.object(Path, "stat", return_value=mock.Mock(st_uid=0)):
+                    self.assertTrue(restore.helper_ready())                              # root-eid og oppdatert
+                    self.assertEqual(restore.helper_command("/tmp/p.json"), ["pkexec", str(fake), "/tmp/p.json"])
                     fake.write_text(f"HELPER_VERSION = {HELPER_VERSION - 1}\n")
-                    old = restore.helper_problem()                             # for gammel
-                    self.assertIn("install.sh", old)
-                    self.assertNotEqual(old, missing)
+                    self.assertFalse(restore.helper_ready())                             # for gammel
 
-    def test_install_restic_needs_helper(self):
+    def test_install_restic_installs_helper_first(self):
         from waypoint import repo
         with mock.patch.dict(os.environ, {"WAYPOINT_HELPER": "/finnes/ikke"}), \
-                mock.patch.object(subprocess, "run") as run:
+                mock.patch.object(repo.system, "package_manager", return_value="zypper"), \
+                mock.patch.object(subprocess, "run", return_value=mock.Mock(stdout="")) as run:
             repo.install_restic(log=lambda t: None)
-            run.assert_not_called()   # ingen pkexec uten root-hjelperen
+            self.assertIn("--install-and-run", run.call_args[0][0])
+
+    def test_self_install(self):
+        sys.path.insert(0, str(ROOT / "waypoint"))
+        import privileged
+        with tempfile.TemporaryDirectory() as d:
+            helper, policy = Path(d, "libexec/waypoint/waypoint-privileged"), Path(d, "actions/x.policy")
+            with mock.patch.object(privileged, "HELPER_PATH", str(helper)), \
+                    mock.patch.object(privileged, "POLICY_PATH", str(policy)), \
+                    mock.patch.object(privileged.os, "chown"), mock.patch.object(privileged, "say"):
+                self.assertEqual(privileged.install(), 0)
+            self.assertEqual(helper.read_bytes(), (ROOT / "waypoint/privileged.py").read_bytes())
+            self.assertEqual(oct(helper.stat().st_mode & 0o777), "0o755")
+            self.assertIn("org.freedesktop.policykit.exec.path", policy.read_text())
+            self.assertIn(privileged.HELPER_PATH, privileged.POLICY)
 
 
 class NetworkTests(unittest.TestCase):

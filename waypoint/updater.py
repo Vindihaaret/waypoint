@@ -159,6 +159,8 @@ def _install(tag: str, log) -> None:
         # Uten terminal og med WAYPOINT_SKIP_DEPS: install.sh skal ikke prøve å installere pakker med sudo her.
         p = subprocess.run(["bash", str(src / "install.sh")], cwd=src, capture_output=True, text=True, timeout=300,
                            stdin=subprocess.DEVNULL, env={**os.environ, "WAYPOINT_SKIP_DEPS": "1"})
+        from . import debuglog
+        debuglog.command(["install.sh", tag], p.returncode, p.stdout, p.stderr)
         for line in (p.stdout + p.stderr).splitlines():
             log(line)
         if p.returncode != 0:
@@ -211,6 +213,8 @@ def check(log=print) -> dict | None:
 def maybe_update(log=print, force: bool = False) -> str | None:
     """Kjøres jevnlig (timeren, statusfeltet, vinduet). Ser etter nye versjoner høyst én gang i døgnet, og
     installerer dem hvis brukeren har valgt det. Returnerer taggen som ble installert, ellers None."""
+    from . import debuglog
+    log = debuglog.tee(log, "update: ")
     cfg = settings.load()
     if not force and not cfg.get("update_check", True):
         return None

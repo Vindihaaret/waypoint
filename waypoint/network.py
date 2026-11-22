@@ -56,6 +56,9 @@ def is_not_mounted(err: GLib.Error) -> bool:
 
 
 def mount(uri: str, user: str, password: str, domain: str, on_question, done):
+    from . import debuglog
+    debuglog.add_secret(password)
+    debuglog.debug("gio mount %s (user %s)", uri, user)
     """Kobler til uri (må kalles fra GUI-tråden). on_question(melding, valg, svar) brukes når serveren spør om noe,
     f.eks. en ukjent SSH-nøkkel; svar(indeks eller None). done(feilmelding eller None)."""
     f = Gio.File.new_for_uri(uri)

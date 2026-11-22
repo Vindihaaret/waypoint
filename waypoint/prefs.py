@@ -330,6 +330,7 @@ class Preferences(Adw.PreferencesDialog):
         t.add(auto_start)
         p.add(t)
         p.add(self._update_group())
+        p.add(self._debug_group())
         # Avinstallering ligger nederst her (ikke i hovedmenyen), så det må være et aktivt valg.
         from . import updater
         if updater.is_installed() and (updater.install_dir() / "uninstall.sh").is_file():
@@ -344,6 +345,50 @@ class Preferences(Adw.PreferencesDialog):
             u.add(row)
             p.add(u)
         return p
+
+    # ------------------------------------------------------------ feilsøking
+
+    def _debug_group(self):
+        from . import debuglog
+        from .app import open_uri
+        g = Adw.PreferencesGroup(title=_("Feilsøking"))
+        sw = Adw.SwitchRow(title=_("Feilsøkingslogg"), active=bool(self.cfg.get("debug")),
+                           subtitle=_("Skriver alt Waypoint gjør til en loggfil, uten passord. Nyttig når noe går galt. "
+                                      "Loggene slettes etter {} dager.").format(debuglog.KEEP_DAYS))
+        sw.add_prefix(Gtk.Image(icon_name="utilities-terminal-symbolic"))
+
+        def toggled(r, _p):
+            settings.set("debug", r.get_active())
+            debuglog.refresh()
+            if r.get_active():
+                from . import __version__
+                debuglog.debug("Debug log turned on in Waypoint %s", __version__)
+        sw.connect("notify::active", toggled)
+        g.add(sw)
+        where = str(debuglog.log_dir()).replace(GLib.get_home_dir(), "~", 1)
+        row = Adw.ActionRow(title=_("Loggfiler"), subtitle=where, use_markup=False)
+        open_btn = Gtk.Button(label=_("Åpne mappen"), valign=Gtk.Align.CENTER)
+
+        def open_dir(*_a):
+            debuglog.log_dir().mkdir(parents=True, exist_ok=True)
+            open_uri(debuglog.log_dir().as_uri(), self.win)
+        open_btn.connect("clicked", open_dir)
+        copy_btn = Gtk.Button(label=_("Kopier siste logg"), valign=Gtk.Align.CENTER)
+
+        def copy_last(*_a):
+            logs = sorted(debuglog.log_dir().glob("*.log"), key=lambda f: f.stat().st_mtime) \
+                if debuglog.log_dir().is_dir() else []
+            if not logs:
+                self.add_toast(Adw.Toast(title=_("Ingen logger ennå")))
+                return
+            text = logs[-1].read_text(encoding="utf-8", errors="replace")[-2_000_000:]
+            self.get_clipboard().set(text)
+            self.add_toast(Adw.Toast(title=_("{} er kopiert").format(logs[-1].name)))
+        copy_btn.connect("clicked", copy_last)
+        row.add_suffix(open_btn)
+        row.add_suffix(copy_btn)
+        g.add(row)
+        return g
 
     # ------------------------------------------------------------ avinstallering
 

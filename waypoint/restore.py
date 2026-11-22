@@ -39,9 +39,8 @@ def helper_version(path: Path) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def helper_problem() -> str | None:
-    """Hvorfor pakker ikke kan installeres akkurat nå, eller None når root-hjelperen er på plass og oppdatert.
-    Hjelperen må være root-eid utenfor hjemmemappen; bare install.sh (med sudo) kan legge den inn."""
+def helper_ready() -> bool:
+    """True når den root-eide hjelperen er på plass og minst like ny som kopien i appen."""
     from .privileged import HELPER_VERSION
     path = helper()
     have = helper_version(path)
@@ -49,14 +48,16 @@ def helper_problem() -> str | None:
         owned_by_root = path.stat().st_uid == 0
     except OSError:
         owned_by_root = False
-    if have is None or not owned_by_root:
-        return _("Kjør ./install.sh fra en terminal for å kunne installere pakker. Det legger inn en liten "
-                 "hjelper som trenger administratorpassordet ditt.")
-    if have < HELPER_VERSION:
-        return _("Kjør ./install.sh fra en terminal på nytt for å kunne installere pakker. Hjelperen som "
-                 "installerer dem, er fra en eldre versjon av Waypoint.")
-    return None
-EGO = "https://extensions.gnome.org"
+    return owned_by_root and have is not None and have >= HELPER_VERSION
+
+
+def helper_command(plan: str) -> list[str]:
+    """pkexec-kommandoen for en plan. Er hjelperen på plass, brukes den. Ellers kjøres kopien i appen én gang med
+    --install-and-run: den legger seg inn som root-eid fil og kjører planen, så brukeren bare får ett passordvindu.
+    Neste gang brukes den installerte hjelperen, og ingen fil i hjemmemappen kjøres som root."""
+    if helper_ready():
+        return ["pkexec", str(helper()), plan]
+    return ["pkexec", "/usr/bin/python3", "-I", str(PRIVILEGED), "--install-and-run", plan]
 
 
 class BadBackup(Exception):
@@ -263,13 +264,6 @@ class BackupFile:
             if not have:
                 g.note = _("Flatpak er ikke installert. Installer pakken «flatpak» først (den står kanskje i listen over).")
             apps.groups.append(g)
-        problem = helper_problem()
-        if problem:  # uten root-hjelperen kan verken kilder eller pakker legges til
-            for g in apps.groups:
-                if g.id in ("repos", "packages"):
-                    g.note = problem
-                    for item in g.items:
-                        item.available = item.selected = False
         result.append(apps)
 
         files = Section(_("Filer og oppsett"), _("Legges tilbake i hjemmemappen. Det som ligger der fra før, flyttes "
@@ -353,18 +347,19 @@ class Restorer:
         self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      text=True, env={**os.environ, "LC_ALL": "C.UTF-8"})
         lines = []
+        from . import debuglog
+        debuglog.command(cmd)
         for line in self.proc.stdout:
             line = line.rstrip()
             lines.append(line)
             log(line)
-        return self.proc.wait(), lines
+        code = self.proc.wait()
+        debuglog.debug("  → exit %s", code)
+        return code, lines
 
     # ------------------------------------------------------------ steg
 
     def do_packages(self, log):
-        problem = helper_problem()
-        if problem:
-            return False, problem
         mgr = system.package_manager()
         plan = {"manager": mgr, "repos": [i.data for i in self._sel("repos")],
                 "packages": [i.id for i in self._sel("packages")]}
@@ -372,7 +367,9 @@ class Restorer:
             json.dump(plan, f)
         try:
             log(_("Ber om administratorpassord …"))
-            code, lines = self._stream(["pkexec", str(helper()), f.name], log)
+            if not helper_ready():
+                log(_("Legger også inn hjelperen som installerer pakker (bare første gang)"))
+            code, lines = self._stream(helper_command(f.name), log)
         finally:
             os.unlink(f.name)
         if code in (126, 127) and not any(line.startswith("@@") for line in lines):

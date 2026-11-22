@@ -1,14 +1,17 @@
 #!/usr/bin/python3 -I
 """Kjøres som root via pkexec: legger til pakkekilder og installerer systempakker.
 
-install.sh legger denne filen inn som root-eid /usr/local/libexec/waypoint/waypoint-privileged, med en egen
-polkit-regel (io.github.waypoint.Waypoint.policy), så ingen program som kjører som brukeren kan bytte den ut og
-vente på administratorpassordet. Oppdatering fra appen (uten root) kan ikke oppdatere den: øk HELPER_VERSION når
-filen endres, så ber Waypoint brukeren kjøre install.sh på nytt.
+Hjelperen ligger som root-eid /usr/local/libexec/waypoint/waypoint-privileged, med en egen polkit-regel, så ingen
+program som kjører som brukeren kan bytte den ut og vente på administratorpassordet. Den legger seg inn selv:
+første gang (og når HELPER_VERSION er økt) kjører Waypoint kopien i appen med --install-and-run via pkexec, så
+brukeren bare får ett passordvindu. install.sh gjør det samme med --install (via sudo) når den kjøres i en terminal.
+Øk HELPER_VERSION når filen endres.
 
-  waypoint-privileged <plan.json>   kjør planen
-  waypoint-privileged --version     skriv HELPER_VERSION
-  waypoint-privileged --uninstall   fjern hjelperen og polkit-regelen (brukes av uninstall.sh)
+  waypoint-privileged <plan.json>                 kjør planen
+  privileged.py --install-and-run <plan.json>     legg inn hjelperen og polkit-regelen, og kjør planen
+  privileged.py --install                         bare legg inn hjelperen og polkit-regelen
+  waypoint-privileged --version                   skriv HELPER_VERSION
+  waypoint-privileged --uninstall                 fjern hjelperen og polkit-regelen (brukes av uninstall.sh)
 
 Leser en plan (JSON) fra filen i argv[1]. Skriver fremdrift til stdout som vanlige linjer, og
 statuslinjer som begynner med «@@» som Waypoint tolker:
@@ -27,6 +30,43 @@ import sys
 HELPER_VERSION = 1
 HELPER_PATH = "/usr/local/libexec/waypoint/waypoint-privileged"
 POLICY_PATH = "/usr/share/polkit-1/actions/io.github.waypoint.Waypoint.policy"
+
+# Innholdet i denne filen slik den ble startet; det er dette som legges inn (leses med en gang, se install()).
+try:
+    with open(os.path.abspath(__file__), "rb") as _f:
+        SELF = _f.read()
+except OSError:
+    SELF = b""
+
+POLICY = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!-- Installed by Waypoint. Lets Waypoint add package repositories and install system packages during a restore
+     through its root-owned helper, with its own text in the password dialog. -->
+<policyconfig>
+  <vendor>Waypoint</vendor>
+  <vendor_url>https://github.com/Vindihaaret/waypoint</vendor_url>
+  <icon_name>io.github.waypoint.Waypoint</icon_name>
+  <action id="io.github.waypoint.Waypoint.privileged">
+    <description>Install packages for Waypoint</description>
+    <description xml:lang="nb">Installere pakker for Waypoint</description>
+    <description xml:lang="de">Pakete für Waypoint installieren</description>
+    <description xml:lang="es">Instalar paquetes para Waypoint</description>
+    <description xml:lang="fr">Installer des paquets pour Waypoint</description>
+    <message>Waypoint wants to add package repositories and install programs from your backup</message>
+    <message xml:lang="nb">Waypoint vil legge til pakkekilder og installere programmer fra sikkerhetskopien din</message>
+    <message xml:lang="de">Waypoint möchte Paketquellen hinzufügen und Programme aus Ihrer Sicherung installieren</message>
+    <message xml:lang="es">Waypoint quiere añadir repositorios e instalar programas de tu copia de seguridad</message>
+    <message xml:lang="fr">Waypoint souhaite ajouter des dépôts et installer des programmes depuis votre sauvegarde</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">%s</annotate>
+  </action>
+</policyconfig>
+""" % HELPER_PATH
 
 # Planen kommer fra en sikkerhetskopi, som kan være laget et annet sted. Alt som sendes til pakkesystemet som root,
 # må derfor se ut som et pakkenavn, en adresse eller et filnavn – aldri som en opsjon.
@@ -130,6 +170,33 @@ def install(mgr, pkgs):
         say(("@@OK " if run(base + [p]) == 0 else "@@FAIL ") + p)
 
 
+def _write(path, data, mode):
+    """Skriver filen atomisk som root:root med gitt modus (aldri via en lenke som ligger der fra før)."""
+    os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+    tmp = path + ".new"
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.chown(tmp, 0, 0)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def install():
+    """Legger inn denne filen som HELPER_PATH og polkit-regelen. Bytene ble lest da filen startet (SELF)."""
+    if not SELF.startswith(b"#!/usr/bin/python3") or b"HELPER_VERSION = " not in SELF:
+        say("Cannot install the helper: unexpected content")
+        return 1
+    _write(HELPER_PATH, SELF, 0o755)
+    _write(POLICY_PATH, POLICY.encode(), 0o644)
+    say("Installed " + HELPER_PATH)
+    return 0
+
+
 def uninstall():
     for path in (HELPER_PATH, POLICY_PATH):
         try:
@@ -145,15 +212,23 @@ def uninstall():
 
 
 def main():
-    if len(sys.argv) != 2:
-        say("Usage: waypoint-privileged <plan.json> | --version | --uninstall")
-        return 2
-    if sys.argv[1] == "--version":
+    args = sys.argv[1:]
+    if args == ["--version"]:
         say(str(HELPER_VERSION))
         return 0
-    if sys.argv[1] == "--uninstall":
+    if args == ["--uninstall"]:
         return uninstall()
-    with open(sys.argv[1]) as f:
+    if args == ["--install"]:
+        return install()
+    if len(args) == 2 and args[0] == "--install-and-run":
+        if install() != 0:
+            return 1
+        args = args[1:]
+    if len(args) != 1 or args[0].startswith("-"):
+        say("Usage: waypoint-privileged <plan.json> | --install-and-run <plan.json> | --install | --version | "
+            "--uninstall")
+        return 2
+    with open(args[0]) as f:
         plan = json.load(f)
     mgr = plan["manager"]
     if mgr not in ("zypper", "dnf", "apt", "pacman"):

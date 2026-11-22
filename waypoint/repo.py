@@ -17,7 +17,7 @@ import socket
 import subprocess
 from pathlib import Path
 
-from . import settings, system
+from . import debuglog, settings, system
 from .i18n import _
 
 TAG = "waypoint"
@@ -80,6 +80,7 @@ class Repo:
         self.password = password
         self.proc: subprocess.Popen | None = None
         self.mount_error = ""
+        debuglog.add_secret(password)
 
     @classmethod
     def for_job(cls, job: dict | None) -> "Repo | None":
@@ -155,8 +156,10 @@ class Repo:
         try:
             p = subprocess.run(self._cmd(args), capture_output=True, text=True, timeout=timeout, input=input,
                                env=self.env())
+            debuglog.command(["restic", *args], p.returncode, p.stdout, p.stderr)
             return p.returncode, p.stdout, p.stderr
         except subprocess.TimeoutExpired:
+            debuglog.command(["restic", *args], None, "", "timed out")
             raise RepoError(_("restic svarte ikke i tide")) from None
 
     def stream(self, args: list[str], on_message, cancelled=lambda: False) -> tuple[int, str]:
@@ -191,6 +194,7 @@ class Repo:
             raise
         code = self.proc.wait()
         t.join(2)
+        debuglog.command(["restic", "--json", *args], code, "", "\n".join(errors))
         return code, "\n".join(errors)
 
     def cancel(self):
@@ -387,15 +391,17 @@ def snapshot_home(snap: dict) -> str:
 
 def install_restic(log=print) -> bool:
     """Installerer restic med systemets pakkesystem (spør om administratorpassord)."""
-    from .restore import helper, helper_problem
+    from .restore import helper_command
     import tempfile
     mgr = system.package_manager()
-    if not mgr or helper_problem():
+    if not mgr:
         return False
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"manager": mgr, "repos": [], "packages": ["restic"]}, f)
     try:
-        p = subprocess.run(["pkexec", str(helper()), f.name], capture_output=True, text=True)
+        cmd = helper_command(f.name)
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        debuglog.command(cmd, p.returncode, p.stdout, p.stderr)
         for line in p.stdout.splitlines():
             log(line)
     finally:

@@ -50,7 +50,8 @@ def _opt(argv: list[str], name: str) -> str | None:
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    from . import migrate, settings as _settings
+    from . import debuglog, migrate, settings as _settings
+    debuglog.setup(argv[0] if argv and not argv[0].endswith((".tar.gz", ".gpg")) else "window")
     migrate.run()
     _settings.migrate_jobs()
     if not argv or argv[0].endswith((".tar.gz", ".gpg")):

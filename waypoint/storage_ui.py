@@ -387,8 +387,7 @@ class StorageDialog(Adw.Dialog):
             self.banner.set_revealed(not ok)
             self.banner.set_button_label(_("Installer"))
             if not ok:
-                from .restore import helper_problem
-                self._toast(helper_problem() or _("restic ble ikke installert"))
+                self._toast(_("restic ble ikke installert"))
             return False
         threading.Thread(target=work, daemon=True).start()
 

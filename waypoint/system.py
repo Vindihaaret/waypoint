@@ -21,9 +21,16 @@ def run(cmd: list[str], timeout: int = 120, input: str | None = None) -> tuple[i
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=input,
                            stdin=None if input is not None else subprocess.DEVNULL)
+        _debug_command(cmd, p.returncode, p.stdout, p.stderr)
         return p.returncode, p.stdout, p.stderr
     except (OSError, subprocess.TimeoutExpired) as e:
+        _debug_command(cmd, 127, "", str(e))
         return 127, "", str(e)
+
+
+def _debug_command(cmd, code, out, err):
+    from . import debuglog
+    debuglog.command(cmd, code, out, err)
 
 
 def out(cmd: list[str], timeout: int = 120) -> str:

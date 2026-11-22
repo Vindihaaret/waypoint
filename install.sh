@@ -105,17 +105,13 @@ fi
 # Packages are installed during a restore by a small helper that runs as root through pkexec. It must be owned
 # by root outside your home folder, so no program running as you can replace it while waiting for the password.
 HELPER=/usr/local/libexec/waypoint/waypoint-privileged
-POLICY=/usr/share/polkit-1/actions/io.github.waypoint.Waypoint.policy
-if ! cmp -s waypoint/privileged.py "$HELPER" || ! cmp -s data/io.github.waypoint.Waypoint.policy "$POLICY" \
-    || [ "$(stat -c %u "$HELPER" 2>/dev/null)" != 0 ]; then
+# Waypoint also installs it by itself the first time packages are installed (one password prompt), so this step
+# is only a convenience.
+if ! cmp -s waypoint/privileged.py "$HELPER" || [ "$(stat -c %u "$HELPER" 2>/dev/null)" != 0 ]; then
   if [ -t 0 ] && [ -z "${WAYPOINT_SKIP_DEPS:-}" ]; then
     echo "==> Installing the helper that installs packages during a restore"
-    if ! { sudo install -Dm755 -o root -g root waypoint/privileged.py "$HELPER" \
-           && sudo install -Dm644 -o root -g root data/io.github.waypoint.Waypoint.policy "$POLICY"; }; then
-      echo "Note: the helper was not installed, so packages cannot be installed during a restore."
-    fi
-  else
-    echo "Note: run ./install.sh from a terminal to install the helper that installs packages during a restore."
+    sudo /usr/bin/python3 -I waypoint/privileged.py --install \
+      || echo "Note: the helper was not installed now; Waypoint installs it when it is first needed."
   fi
 fi
 

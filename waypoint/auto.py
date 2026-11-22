@@ -278,6 +278,9 @@ class _Lock:
 def run(force: bool = False, log=print, job_id: str | None = None, interactive: bool = False) -> int:
     """Kjøres av timeren (alle automatiske oppgaver som er på tide) og av «Ta sikkerhetskopi nå» (force; én
     oppgave med job_id, ellers alle). Returnerer 0 når alt er i orden."""
+    from . import debuglog
+    log = debuglog.tee(log)
+    debuglog.debug("auto.run force=%s job=%s interactive=%s", force, job_id, interactive)
     try:
         return _run(force, log, job_id, interactive)
     finally:
@@ -586,6 +589,8 @@ def maybe_check(cfg: dict, job: dict, status: dict, log=print, force: bool = Fal
 def check_all(log=print) -> bool:
     """«Kontroller nå» for alle oppgaver (kommandoen «waypoint check»). Tar samme lås som kopiene og venter på en
     kopi som kjører, så restic check og restic backup aldri kjører samtidig mot samme lager."""
+    from . import debuglog
+    log = debuglog.tee(log)
     lock = _Lock()
     lock.acquire(wait=True)
     try:

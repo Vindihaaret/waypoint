@@ -35,6 +35,7 @@ DEFAULTS = {
     "excludes": ["node_modules", "*.iso", "*.vdi", "*.vmdk", "*.qcow2", ".Trash-*"],
     "exclude_larger": "",      # f.eks. "4G"; tom = ingen grense
     "check_days": 30,          # kontroller kopiene så ofte; 0 = aldri
+    "debug": False,            # feilsøkingslogg i ~/.local/state/waypoint/logs (debuglog.py)
 }
 # Fra før oppgavene (0.5.0 og eldre): ett lagringssted med automatikk og valg. Gjøres om til én oppgave av
 # migrate_jobs() og blir deretter ikke brukt.
@@ -320,10 +321,15 @@ def clear_secret(purpose: str):
 
 def get_password() -> str | None:
     """Passordet for sikkerhetskopiene (restic-lageret og krypterte eksportfiler)."""
-    return os.environ.get("WAYPOINT_PASSWORD") or get_secret("backup")
+    pw = os.environ.get("WAYPOINT_PASSWORD") or get_secret("backup")
+    from . import debuglog
+    debuglog.add_secret(pw)   # aldri i en logg
+    return pw
 
 
 def store_password(password: str) -> bool:
+    from . import debuglog
+    debuglog.add_secret(password)
     return store_secret("backup", password, "Waypoint – passord for sikkerhetskopier")
 
 

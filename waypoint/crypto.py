@@ -42,6 +42,8 @@ class _Gpg:
     def __init__(self, args: list[str], password: str, stdin=None, stdout=None):
         if not available():
             raise CryptoError("gpg mangler")
+        from . import debuglog
+        debuglog.add_secret(password)
         self.home = tempfile.mkdtemp(prefix="waypoint-gpg-")
         os.chmod(self.home, 0o700)
         r, w = os.pipe()
