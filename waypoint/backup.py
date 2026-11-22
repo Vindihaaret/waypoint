@@ -428,7 +428,10 @@ def write_backup(sections: list[Section], dest: Path, password: str | None = Non
 
     def add_tree(t, src: Path, arc_prefix: str):
         nonlocal done
-        for p, size in system.walk_files(src):
+        # Ligger målet inni en mappe som tas med, må eksporten ikke ta med seg selv (.part-filen, det krypterte
+        # arkivet med private data eller målfilen fra en tidligere eksport).
+        skip = {tmp, dest} | ({blob} if blob else set())
+        for p, size in system.walk_files(src, skip):
             if cancelled():
                 raise Cancelled()
             arc = arc_prefix + str(p.relative_to(src)) if p != src else arc_prefix.rstrip("/")
@@ -537,4 +540,7 @@ def exclude_patterns(user_patterns: list[str], extra_paths: list[str] = ()) -> l
     pats = [f"{home}/{root}/**/{glob_escape(n)}" for root in APP_DATA_ROOTS for n in names]
     pats += [home + p[1:] if p.startswith("~/") else p for p in user_patterns if p.strip()]
     pats += [glob_escape(p) for p in extra_paths]
+    # Eksportfiler (også halvskrevne) og det midlertidige krypterte arkivet fra en eksport som pågår
+    pats += ["waypoint-*.tar.gz", "waypoint-*.tar.gz.gpg", "waypoint-*.tar.gz*.part", "flytt-*.tar.gz",
+             "flytt-*.tar.gz.gpg", ".waypoint-private-*.gpg"]
     return pats

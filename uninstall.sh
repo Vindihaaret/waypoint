@@ -14,6 +14,16 @@ systemctl --user daemon-reload 2>/dev/null || true
 for pid in $(ps -eo pid=,args= | awk '$2 ~ /python3$/ && $3 == "-m" && $4 == "waypoint" && $5 == "tray" {print $1}'); do
   kill "$pid" 2>/dev/null || true
 done
+# The root-owned helper for package installation (see install.sh) needs the administrator password to remove.
+HELPER=/usr/local/libexec/waypoint/waypoint-privileged
+if [ -e "$HELPER" ]; then
+  if [ -t 0 ]; then
+    sudo "$HELPER" --uninstall || true
+  else
+    pkexec "$HELPER" --uninstall || true
+  fi
+  [ -e "$HELPER" ] && echo "Note: remove $HELPER and /usr/share/polkit-1/actions/io.github.waypoint.Waypoint.policy as root."
+fi
 rm -rf "$PREFIX/waypoint/app"
 rmdir "$PREFIX/waypoint" 2>/dev/null || true
 rm -f "$HOME/.local/bin/waypoint" "$PREFIX/applications/io.github.waypoint.Waypoint.desktop" \

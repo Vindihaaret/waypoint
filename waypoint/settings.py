@@ -85,10 +85,19 @@ def delete_job(job_id: str):
     with _status_lock():
         s = _read_status_file()
         (s.get("jobs") or {}).pop(job_id, None)
+        # Husk at oppgaven ble slettet her: bare da kan tidspunktene dens slettes når disken er full (auto.py).
+        deleted = s.setdefault("deleted_jobs", [])
+        if job_id not in deleted:
+            deleted.append(job_id)
         write_json(status_path(), s)
     import shutil
     shutil.rmtree(state_dir() / f"setup-{job_id}", ignore_errors=True)
     (state_dir() / f"excludes-{job_id}.txt").unlink(missing_ok=True)
+
+
+def deleted_job_ids() -> set[str]:
+    """Oppgaver som er slettet på denne installasjonen (se delete_job)."""
+    return {*(_read_status_file().get("deleted_jobs") or [])}
 
 
 def migrate_jobs():

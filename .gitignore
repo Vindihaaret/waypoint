@@ -3,3 +3,4 @@ __pycache__/
 # Notater for Claude og kodesjekker holdes lokalt
 CLAUDE.md
 REVIEW.md
+HANDOVER-*.md

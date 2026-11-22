@@ -447,6 +447,9 @@ class Preferences(Adw.PreferencesDialog):
     def _update_clicked(self, *_a):
         from . import updater
         tag = self._avail
+        if tag and updater.busy():
+            self.add_toast(Adw.Toast(title=_("En sikkerhetskopi pågår – prøv igjen når den er ferdig")))
+            return
         self._refresh_update(busy=_("Installerer …") if tag else _("Ser etter …"))
 
         def work():

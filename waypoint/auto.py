@@ -71,7 +71,8 @@ def install_timer(enabled: bool, cal: list[str] | None = None) -> bool:
     d = unit_dir()
     if enabled:
         d.mkdir(parents=True, exist_ok=True)
-        cmd = " ".join(f'"{c}"' if " " in c else c for c in command())
+        # «%» er en spesifikator i systemd-filer og må skrives «%%» (f.eks. i en sti med prosenttegn).
+        cmd = " ".join(f'"{c}"' if " " in c else c for c in command()).replace("%", "%%")
         (d / f"{UNIT}.service").write_text(
             "[Unit]\nDescription=Waypoint: automatic backup\n\n"
             f"[Service]\nType=oneshot\nExecStart={cmd} auto\nNice=10\nIOSchedulingClass=idle\n")
@@ -396,7 +397,10 @@ def _backup(cfg: dict, job: dict, repo: repo_mod.Repo, log, interactive: bool = 
     try:
         repo.unlock()  # fjerner gamle låser etter en avbrutt kjøring
         adopt_untagged(job, repo, log)
-        status(progress=0.01)
+        if size_limit(job):  # gjør plass under grensen før kopien, med like mye som forrige kopi la til
+            status(current=_("Rydder for å holde lageret under grensen …"))
+            enforce_limit(repo, job, log, reserve=int(settings.job_status(jid).get("last_added") or 0))
+        status(progress=0.01, current=None)
         sections = backup.scan(personal=True, measure=False)
         apply_job(sections, job)
         setup_dir = settings.state_dir() / f"setup-{jid}"
@@ -424,7 +428,14 @@ def _backup(cfg: dict, job: dict, repo: repo_mod.Repo, log, interactive: bool = 
         prune = (_ago(settings.job_status(jid).get("last_prune")) or 1e9) > 6 * 86400
         status(progress=1.0, current=_("Rydder gamle tidspunkter …"))
         repo.forget_timeline(prune=prune, job_id=jid)
-        changes = {"state": "ok", "last_success": now_iso(), "progress": None, "current": None,
+        size = enforce_limit(repo, job, log)
+        limit = size_limit(job)
+        over = bool(limit and size and size > limit)
+        if over:
+            notify_once("over-limit:" + jid, _("Sikkerhetskopiene er større enn grensen"),
+                        _("«{}» bruker {}, grensen er {}. Det nyeste tidspunktet beholdes alltid – øk grensen, "
+                          "eller velg mindre innhold.").format(job.get("name", ""), _fmt(size), _fmt(limit)))
+        changes = {"state": "ok", "repo_size": size, "over_limit": over, "last_success": now_iso(), "progress": None, "current": None,
                    "last_snapshot": summary.get("snapshot_id"), "last_added": summary.get("data_added"),
                    "last_files": summary.get("total_files_processed"),
                    "last_incomplete": bool(summary.get("incomplete"))}
@@ -457,15 +468,64 @@ def adopt_untagged(job: dict, repo: repo_mod.Repo, log):
 
 
 SPACE_RETRIES = 5
+LIMIT_ROUNDS = 10   # høyst så mange tidspunkter slettes per kjøring for å komme under grensen (prune hver gang)
 
 
-def space_candidates(snaps: list[dict], job_id: str | None, known_jobs: set[str]) -> list[dict]:
+def size_limit(job: dict) -> int | None:
+    """Maks størrelse for lageret til oppgaven i byte (job["max_size_gb"], GB = 10⁹ byte), eller None."""
+    try:
+        gb = int(job.get("max_size_gb") or 0)
+    except (TypeError, ValueError):
+        return None
+    return gb * 10**9 if gb > 0 else None
+
+
+def repo_size(repo: repo_mod.Repo) -> int | None:
+    """Hvor mye plass lageret bruker nå (summen av filene i Waypoint-mappen), eller None hvis det ikke kan leses."""
+    loc = repo.location(mount=False)
+    if not loc:
+        return None
+    total = 0
+    for dirpath, _dirs, files in os.walk(loc):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(dirpath, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def enforce_limit(repo: repo_mod.Repo, job: dict, log, reserve: int = 0) -> int | None:
+    """Behandler lageret som fullt når det (pluss reserve, plassen neste kopi ventes å trenge) er over oppgavens
+    grense: sletter de eldste tidspunktene etter samme regler som ved full disk (space_candidates – aldri det
+    nyeste, aldri andre oppgavers), ett om gangen med prune. Returnerer størrelsen etterpå."""
+    limit = size_limit(job)
+    size = repo_size(repo)
+    if not limit or size is None:
+        return size
+    for _round in range(LIMIT_ROUNDS):
+        if size + reserve <= limit:
+            break
+        candidates = space_candidates(repo.snapshots(only_host=True), job["id"], settings.deleted_job_ids())
+        if not candidates:
+            break
+        oldest = candidates[0]
+        log(_("Over grensen på {} – sletter det eldste tidspunktet {}").format(_fmt(limit),
+                                                                               oldest.get("time", "")[:16]))
+        repo.forget_ids([oldest["id"]], prune=True)
+        size = repo_size(repo) or 0
+    return size
+
+
+def space_candidates(snaps: list[dict], job_id: str | None, deleted_jobs: set[str]) -> list[dict]:
     """Tidspunkter som kan slettes når disken er full, eldste først: denne oppgavens (unntatt det nyeste), og
-    foreldreløse – uten oppgave (fra før oppgavene fantes) eller fra en oppgave som er slettet."""
+    foreldreløse – uten oppgave (fra før oppgavene fantes) eller fra en oppgave som er slettet på denne
+    installasjonen. Tidspunkter fra oppgaver Waypoint ikke kjenner (f.eks. fra før en ny installasjon med samme
+    maskinnavn, eller fra en annen installasjon som deler disken) slettes aldri automatisk."""
     def job_of(s):
         return repo_mod.snapshot_job(s)
     own = sorted((s for s in snaps if job_of(s) == job_id), key=lambda s: s.get("time", ""))[:-1]
-    orphans = [s for s in snaps if job_of(s) is None or job_of(s) not in known_jobs]
+    orphans = [s for s in snaps if job_of(s) != job_id and (job_of(s) is None or job_of(s) in deleted_jobs)]
     return sorted(own + orphans, key=lambda s: s.get("time", ""))
 
 
@@ -478,7 +538,7 @@ def _with_space_retry(repo: repo_mod.Repo, do, log, job_id: str | None = None):
         except repo_mod.RepoError as e:
             if not e.no_space or repo.remote or attempt == SPACE_RETRIES:
                 raise
-            candidates = space_candidates(repo.snapshots(only_host=True), job_id, {j["id"] for j in settings.jobs()})
+            candidates = space_candidates(repo.snapshots(only_host=True), job_id, settings.deleted_job_ids())
             if not candidates:
                 raise
             oldest = candidates[0]

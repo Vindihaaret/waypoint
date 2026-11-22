@@ -19,11 +19,12 @@ time, recover a single file, or **move your whole setup to a new installation** 
   only new and changed files are stored. Everything is encrypted with AES-256 before it leaves the computer.
 * **Like Time Machine**: backups run in the background, even when Waypoint is closed. Old points in time are thinned
   out (all from the last 24 hours, one per day for the past month, one per week before that), and the oldest are
-  deleted when the disk is full. Backups are verified regularly.
+  deleted when the disk is full – or when a task reaches the maximum size you set for it. Backups are verified regularly.
 * **NAS without typing paths**: log in with user name and password (SMB or SFTP) and browse to the folder. Waypoint
   connects to the NAS by itself when a backup is due.
 * **Restore everything** on a new installation: GNOME settings, extensions (fetched again from extensions.gnome.org
-  if GNOME has been updated), wallpaper, system packages and repositories, Flatpak apps and your files. Anything that
+  if GNOME has been updated), wallpaper, system packages (and repositories on zypper and dnf), Flatpak apps and
+  your files. Anything that
   is replaced is moved aside, so nothing is lost.
 * **Recover single files** from an earlier point in time.
 * **Export your setup** to a single encrypted file to move it to another computer.
@@ -51,7 +52,7 @@ Made by **Jan Ivar Sørensen** using [Claude Code](https://claude.com/claude-cod
 | GNOME settings (dconf): shortcuts, theme, dock, mouse, keyboard, app folders | `dconf load`, in three groups you can choose separately |
 | Wallpaper and lock screen | Set again |
 | GNOME extensions | From the backup if they match the GNOME version, otherwise fetched from extensions.gnome.org |
-| System packages you installed yourself (zypper, dnf, apt, pacman) and repositories | Installed again with the administrator password (pkexec) |
+| System packages you installed yourself (zypper, dnf, apt, pacman), and repositories (zypper, dnf) | Installed again with the administrator password (pkexec); repositories are never selected in advance |
 | Flatpak apps and remotes | `flatpak install` |
 | Personal folders: Documents, Pictures, Music, Videos, Downloads and other folders in your home folder | Put back |
 | Configuration: `~/.config`, fonts, themes, `.bashrc`, `.gitconfig`, `~/.local/bin`, Flatpak app data | Put back |
@@ -70,16 +71,33 @@ cd waypoint
 
 `install.sh` installs Waypoint in your home folder (`~/.local`) and adds it to the app overview. If something Waypoint
 needs is missing, it is installed first with your package manager (zypper, dnf, apt or pacman), and `sudo` asks for
-your password. Waypoint needs Python 3.10+, PyGObject, GTK 4.12+, libadwaita 1.6+, libsecret, restic, gpg (for
-exported files), dconf (for GNOME settings) and GVfs with SMB, SFTP and FUSE (for a NAS).
+your password. It also installs a small root-owned helper that installs packages during a restore (see
+[Security](#security)). Waypoint needs Python 3.10.12+ (or 3.11.4+), PyGObject, GTK 4.12+, libadwaita 1.6+,
+libsecret, restic, gpg (for exported files), dconf (for GNOME settings) and GVfs with SMB, SFTP and FUSE (for a
+NAS).
 
 **Updates:** *Settings → General → Updates* installs new versions from the app, or run `./install.sh` again from a
 newer copy of the source.
 
 **Uninstall:** *Settings → General → Uninstall Waypoint*, or `waypoint uninstall` in a terminal. The app, its menu
-entry, the system tray icon and the automatic backups are removed. Your backups, the password in the keyring and the
+entry, the system tray icon, the automatic backups and the root-owned helper are removed (the helper needs the
+administrator password). Your backups, the password in the keyring and the
 files kept from restores are left alone, so you can install Waypoint again and get everything back. Add
 `--purge` (or tick the box in the app) to delete your settings and tasks as well.
+
+## Security
+
+* **Updates** are downloaded over HTTPS from the releases on GitHub. Waypoint checks that the download is the
+  version it asked for and contains no links or paths outside its folder, but releases are not signed.
+* **Installing packages during a restore** needs root. This is done by a small helper that `install.sh` puts in
+  `/usr/local/libexec/waypoint/waypoint-privileged`, owned by root, with its own polkit action, so the password
+  dialog says what it is for and no program running as you can replace the helper. Updates from the app run without
+  `sudo` and cannot update it; when the helper changes, Waypoint asks you to run `./install.sh` again from a terminal.
+* **Repositories from a backup** are never selected in advance, and you see the full address (for dnf, the whole
+  repository file as it will be written). dnf files with more than one repository or with signature checks turned
+  off are skipped, and zypper only trusts signing keys for repositories you chose.
+* **Encrypted backups** are checked for changes when they are restored: if gpg reports that the file was damaged or
+  altered, the restore says so.
 
 ## How it works
 

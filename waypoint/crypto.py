@@ -77,7 +77,7 @@ class _Gpg:
         return self
 
     def __exit__(self, *exc):
-        if exc[0] is not None:
+        if self.proc.poll() is None:  # aldri la en gpg-prosess bli igjen, heller ikke uten unntak
             self.kill()
         self.cleanup()
 

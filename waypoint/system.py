@@ -75,7 +75,6 @@ def shell_major() -> str:
 # ---------------------------------------------------------------- systempakker
 
 # Pakker som alltid følger med en installasjon og bare er støy i en liste over «dine» programmer.
-# Pakker som alltid følger med en installasjon og bare er støy i en liste over «dine» programmer.
 _BASE_NAMES = {"gpg-pubkey", "glibc", "shim", "dracut", "rpm", "filesystem", "systemd", "openSUSE-release",
                "fedora-release", "sdbootutil", "dosfstools", "e2fsprogs", "btrfsprogs", "os-prober", "base-files",
                "kernel-default", "kernel-firmware", "kernel-core", "kernel"}
@@ -337,8 +336,24 @@ def skip_entry(name: str, is_dir: bool) -> bool:
     return (is_dir and name in CACHE_NAMES) or name in LOCK_NAMES
 
 
-def walk_files(root: Path):
-    """Gir (sti, størrelse) for alle filer, mapper og lenker under root, uten mellomlager."""
+def is_backup_name(name: str) -> bool:
+    """En eksportfil fra Waypoint (eller Flytt)."""
+    return name.startswith(("waypoint-", "flytt-")) and (name.endswith(".tar.gz") or name.endswith(".tar.gz.gpg"))
+
+
+def is_export_artifact(name: str) -> bool:
+    """Waypoint sine egne eksportfiler: ferdige, halvskrevne (.part) og det midlertidige krypterte arkivet med
+    private data. De skal aldri tas med i en ny eksport (filen ville vokst for hver gang)."""
+    if name.startswith(".waypoint-private-") and name.endswith(".gpg"):
+        return True
+    return is_backup_name(name[:-5] if name.endswith(".part") else name)
+
+
+def walk_files(root: Path, skip: frozenset | set = frozenset()):
+    """Gir (sti, størrelse) for alle filer, mapper og lenker under root, uten mellomlager. Stier i skip og
+    Waypoint sine egne eksportfiler hoppes over."""
+    if root in skip:
+        return
     if root.is_symlink() or root.is_file():
         try:
             yield root, root.lstat().st_size if root.is_file() else 0
@@ -354,9 +369,11 @@ def walk_files(root: Path):
         for d in dirnames:
             yield base / d, 0
         for f in filenames:
-            if skip_entry(f, False):
+            if skip_entry(f, False) or is_export_artifact(f):
                 continue
             p = base / f
+            if p in skip:
+                continue
             try:
                 st = p.lstat()
             except OSError:

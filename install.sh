@@ -12,6 +12,7 @@ gui_ok() {
   python3 - <<'PY' 2>/dev/null
 import sys
 assert sys.version_info >= (3, 10)
+assert hasattr(__import__("tarfile"), "data_filter")  # tarfile filter=: Python 3.10.12+ or 3.11.4+
 import gi
 gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1"); gi.require_version("Secret", "1")
 from gi.repository import Gtk, Adw, Secret
@@ -85,7 +86,7 @@ if [ -n "$MISSING" ]; then
   fi
 fi
 if [[ " $MISSING " == *" gui "* ]]; then
-  echo "ERROR: Waypoint needs Python 3.10+, PyGObject, GTK 4.12+, libadwaita 1.6+ and libsecret."
+  echo "ERROR: Waypoint needs Python 3.10.12+ (or 3.11.4+), PyGObject, GTK 4.12+, libadwaita 1.6+ and libsecret."
   echo "       Install them with your package manager and run this script again."
   if [ -n "$PKGS" ]; then echo "       Packages: $PKGS"; fi
   exit 1
@@ -98,6 +99,24 @@ if [ -n "$MISSING" ]; then
   case " $MISSING " in *" gio "* | *" smb "* | *" sftp "* | *" fuse "*)
     echo "      Storage on a NAS needs GVfs (gio, SMB/SFTP and FUSE)." ;; esac
   if [ -n "$PKGS" ]; then echo "      Packages to install: $PKGS"; fi
+fi
+
+# ---------------------------------------------------------------- root helper
+# Packages are installed during a restore by a small helper that runs as root through pkexec. It must be owned
+# by root outside your home folder, so no program running as you can replace it while waiting for the password.
+HELPER=/usr/local/libexec/waypoint/waypoint-privileged
+POLICY=/usr/share/polkit-1/actions/io.github.waypoint.Waypoint.policy
+if ! cmp -s waypoint/privileged.py "$HELPER" || ! cmp -s data/io.github.waypoint.Waypoint.policy "$POLICY" \
+    || [ "$(stat -c %u "$HELPER" 2>/dev/null)" != 0 ]; then
+  if [ -t 0 ] && [ -z "${WAYPOINT_SKIP_DEPS:-}" ]; then
+    echo "==> Installing the helper that installs packages during a restore"
+    if ! { sudo install -Dm755 -o root -g root waypoint/privileged.py "$HELPER" \
+           && sudo install -Dm644 -o root -g root data/io.github.waypoint.Waypoint.policy "$POLICY"; }; then
+      echo "Note: the helper was not installed, so packages cannot be installed during a restore."
+    fi
+  else
+    echo "Note: run ./install.sh from a terminal to install the helper that installs packages during a restore."
+  fi
 fi
 
 # Remove the old installation from when the app was called Flytt (its settings are moved on first start).

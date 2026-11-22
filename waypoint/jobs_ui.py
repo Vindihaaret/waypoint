@@ -314,7 +314,7 @@ def progress_page(win, job_id: str, started_at: float | None = None) -> Adw.Navi
 # ======================================================================= lage og redigere en oppgave
 
 def job_page(win, job: dict | None) -> Adw.NavigationPage:
-    from .app import bottom_bar, label, page, pill, scrolled, vbox
+    from .app import bottom_bar, fmt_size, label, page, pill, scrolled, vbox
     is_new = job is None
     job = dict(job or new_job())
     box = vbox(24, 24)
@@ -342,6 +342,14 @@ def job_page(win, job: dict | None) -> Adw.NavigationPage:
     storage_btn = Gtk.Button(valign=Gtk.Align.CENTER)
     storage_row.add_suffix(storage_btn)
     where.add(storage_row)
+    # Maks størrelse: lageret behandles som fullt når grensen nås (de eldste tidspunktene slettes, se auto.py).
+    limit_on = Adw.SwitchRow(title=_("Begrens størrelsen"), active=bool(job.get("max_size_gb")))
+    limit_on.add_prefix(Gtk.Image(icon_name="drive-harddisk-system-symbolic"))
+    limit_gb = Adw.SpinRow(title=_("Maks størrelse (GB)"),
+                           adjustment=Gtk.Adjustment(value=int(job.get("max_size_gb") or 500), lower=1, upper=1000000,
+                                                     step_increment=10, page_increment=100))
+    where.add(limit_on)
+    where.add(limit_gb)
     box.append(where)
 
     when = Adw.PreferencesGroup(title=_("Når"))
@@ -398,6 +406,14 @@ def job_page(win, job: dict | None) -> Adw.NavigationPage:
             storage_btn.add_css_class("suggested-action")
         custom.set_subtitle(_("Egne valg") if job.get("choices") else _("Standardvalgene for «{}»").format(
             _(dict(PRESETS)[job.get("preset") or "all"])))
+        limit_gb.set_visible(limit_on.get_active())
+        used = settings.job_status(job["id"]).get("repo_size") if not is_new else None
+        size_text = _("Når grensen nås, slettes de eldste tidspunktene, som når disken er full")
+        if used:
+            size_text = _("Bruker nå {}").format(fmt_size(used)) + " · " + size_text
+        limit_on.set_subtitle(size_text)
+        gb = int(limit_gb.get_value())
+        limit_gb.set_subtitle(fmt_size(gb * 10**9) if gb >= 1000 else "")
         on = automatic.get_active()
         often.set_sensitive(on)
         timed = ikeys[often.get_selected()] in ("daily", "weekly")
@@ -426,6 +442,8 @@ def job_page(win, job: dict | None) -> Adw.NavigationPage:
     automatic.connect("notify::active", lambda *_a: refresh())
     often.connect("notify::selected", lambda *_a: refresh())
     fixed.connect("notify::active", lambda *_a: refresh())
+    limit_on.connect("notify::active", lambda *_a: refresh())
+    limit_gb.connect("notify::value", lambda *_a: refresh())
 
     def pick_storage(*_a):
         def chosen(cfg):
@@ -450,6 +468,7 @@ def job_page(win, job: dict | None) -> Adw.NavigationPage:
             job["weekday"] = weekday.get_selected()
         else:
             job["at"] = None
+        job["max_size_gb"] = int(limit_gb.get_value()) if limit_on.get_active() else None
         old = settings.job(job["id"])
         settings.save_job(job)
         if job["enabled"] and (not old or not old.get("enabled")):

@@ -387,16 +387,15 @@ def snapshot_home(snap: dict) -> str:
 
 def install_restic(log=print) -> bool:
     """Installerer restic med systemets pakkesystem (spør om administratorpassord)."""
-    from .restore import PRIVILEGED
+    from .restore import helper, helper_problem
     import tempfile
     mgr = system.package_manager()
-    if not mgr:
+    if not mgr or helper_problem():
         return False
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"manager": mgr, "repos": [], "packages": ["restic"]}, f)
-    os.chmod(f.name, 0o644)
     try:
-        p = subprocess.run(["pkexec", "/usr/bin/python3", str(PRIVILEGED), f.name], capture_output=True, text=True)
+        p = subprocess.run(["pkexec", str(helper()), f.name], capture_output=True, text=True)
         for line in p.stdout.splitlines():
             log(line)
     finally:

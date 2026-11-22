@@ -118,10 +118,42 @@ def extract(archive: Path, target: Path, tag: str) -> Path:
     return src
 
 
+class Busy(UpdateError):
+    """En sikkerhetskopi eller kontroll pågår; oppdateringen må vente."""
+
+
+def busy() -> bool:
+    """True når en sikkerhetskopi kjører (i en hvilken som helst prosess) eller noen holder låsen for kopiene.
+    Da skal ikke koden i ~/.local/share/waypoint/app byttes ut: kopien henter moduler underveis og kunne fått en
+    blanding av gammel og ny kode."""
+    if settings.running_jobs():
+        return True
+    from . import auto
+    lock = auto._Lock()
+    try:
+        return not lock.acquire()
+    finally:
+        lock.close()  # slipper låsen igjen med en gang
+
+
 def install(tag: str, log=print) -> None:
-    """Henter utgivelsen og kjører install.sh fra den (uten root, siden Waypoint ligger i hjemmemappen)."""
+    """Henter utgivelsen og kjører install.sh fra den (uten root, siden Waypoint ligger i hjemmemappen).
+    Holder låsen for sikkerhetskopiene mens den kjører, så ingen kopi kan starte midt i oppdateringen."""
     if not is_installed():
         raise UpdateError("not an installed Waypoint")
+    from . import auto
+    from .i18n import _
+    lock = auto._Lock()
+    if settings.running_jobs() or not lock.acquire():
+        lock.close()
+        raise Busy(_("En sikkerhetskopi pågår – prøv igjen når den er ferdig"))
+    try:
+        _install(tag, log)
+    finally:
+        lock.close()
+
+
+def _install(tag: str, log) -> None:
     base, src = download(tag)
     try:
         # Uten terminal og med WAYPOINT_SKIP_DEPS: install.sh skal ikke prøve å installere pakker med sudo her.
@@ -194,18 +226,20 @@ def maybe_update(log=print, force: bool = False) -> str | None:
         return None
     from . import auto
     from .i18n import _
-    can_install = is_installed() and settings.read_status().get("state") != "running"
-    if cfg.get("update_auto") and can_install:
+    if cfg.get("update_auto") and is_installed() and not busy():
         try:
             install(newer["tag"], log)
+        except Busy:
+            pass  # en kopi startet akkurat nå: si fra om den nye versjonen i stedet (under)
         except (UpdateError, OSError, subprocess.SubprocessError) as e:
             settings.update_status(update_error=str(e))
             auto.notify_once("update-failed:" + newer["tag"], _("Oppdateringen av Waypoint feilet"), str(e))
             return None
-        settings.update_status(update_available=None, update_installed=newer["tag"])
-        auto.notify(_("Waypoint er oppdatert"), _("Ny versjon: {}").format(newer["version"]))
-        restart_tray()
-        return newer["tag"]
+        else:
+            settings.update_status(update_available=None, update_installed=newer["tag"])
+            auto.notify(_("Waypoint er oppdatert"), _("Ny versjon: {}").format(newer["version"]))
+            restart_tray()
+            return newer["tag"]
     auto.notify_once("update:" + newer["tag"], _("Ny versjon av Waypoint"),
                      _("Versjon {} er klar. Oppdater fra Innstillinger → Generelt.").format(newer["version"]),
                      every=1e12)

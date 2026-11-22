@@ -225,7 +225,8 @@ class Chooser:
         all_check.connect("toggled", all_toggled)
         for item in g.items:
             row = Adw.ActionRow(title=item.label, subtitle=item.detail, use_markup=False)
-            row.set_subtitle_lines(1)
+            # Pakkekilder vises i sin helhet (adresse, eller hele .repo-filen), så brukeren ser hva som legges til.
+            row.set_subtitle_lines(0 if g.id == "repos" else 1)
             chk = Gtk.CheckButton(valign=Gtk.Align.CENTER, active=item.selected and item.available)
             chk.add_css_class("selection-mode")
             row.add_prefix(chk)

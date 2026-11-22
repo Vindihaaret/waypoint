@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -191,6 +192,63 @@ class CryptoTests(unittest.TestCase):
         self._run(True)
 
 
+TAMPER_SCRIPT = """
+import sys; sys.path.insert(0, {root!r})
+from pathlib import Path
+from waypoint import backup, restore
+from waypoint.model import Section, Group, Item
+mode, name = sys.argv[1], Path(sys.argv[2])
+if mode == "backup":
+    g = Group("files-x", "x", items=[
+        Item(id=".bashrc", label="b", data={{"path": ".bashrc", "category": "shell"}}),
+        Item(id="Stor", label="s", data={{"path": "Stor", "category": "personal"}})])
+    backup.write_backup([Section("F", "", [g])], name, password="passord123", encrypt_all=True)
+else:
+    try:
+        b = restore.BackupFile(name, "passord123")
+    except restore.BadBackup as e:
+        print("BADBACKUP", e); sys.exit(0)
+    r = restore.Restorer(b, b.sections())
+    for st in r.steps():
+        print(st.id, st.func(lambda t: None))
+"""
+
+
+class TamperTests(unittest.TestCase):
+    """H2: en kryptert kopi som er endret eller skadet, skal ikke gjenopprettes som om alt gikk bra."""
+
+    def test_tampered_encrypted_backup_is_reported(self):
+        if not shutil.which("gpg"):
+            self.skipTest("gpg mangler")
+        with tempfile.TemporaryDirectory() as src, tempfile.TemporaryDirectory() as dst, \
+                tempfile.TemporaryDirectory() as out:
+            Path(src, ".bashrc").write_text("alias x=y")
+            Path(src, "Stor").mkdir()
+            Path(src, "Stor/data.bin").write_bytes(os.urandom(6 * 1024 * 1024))  # flere gpg-blokker
+            code = TAMPER_SCRIPT.format(root=str(ROOT))
+            name = Path(out, "waypoint-t.tar.gz.gpg")
+            env = {**os.environ, "HOME": src, "XDG_CONFIG_HOME": src + "/.config", "XDG_STATE_HOME": src + "/.state"}
+            subprocess.run([sys.executable, "-c", code, "backup", str(name)], env=env, check=True,
+                           capture_output=True)
+            env.update(HOME=dst, XDG_CONFIG_HOME=dst + "/.config", XDG_STATE_HOME=dst + "/.state")
+            # Uendret kopi: går bra
+            r = subprocess.run([sys.executable, "-c", code, "restore", str(name)], env=env, capture_output=True,
+                               text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("files (True", r.stdout)
+            # Endre noen byte nær slutten
+            data = bytearray(name.read_bytes())
+            for i in range(len(data) - 200, len(data) - 190):
+                data[i] ^= 0xFF
+            name.write_bytes(bytes(data))
+            shutil.rmtree(Path(dst, "Stor"))
+            r = subprocess.run([sys.executable, "-c", code, "restore", str(name)], env=env, capture_output=True,
+                               text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("files (True", r.stdout)
+            self.assertTrue("files (False" in r.stdout or "BADBACKUP" in r.stdout, r.stdout)
+
+
 class PlaceTests(unittest.TestCase):
     """Filer flyttes på plass; det som lå der fra før, havner i angremappen."""
 
@@ -211,6 +269,247 @@ class PlaceTests(unittest.TestCase):
             self.assertEqual(Path(dst, "Dokumenter/c.txt").read_text(), "urørt")
 
 
+class UniqueNameTests(unittest.TestCase):
+    """M3: en fil som hentes tilbake flere ganger, skal aldri overskrive noe."""
+
+    def test_unique_name(self):
+        from waypoint.restore import unique_name
+        with tempfile.TemporaryDirectory() as d:
+            arc = Path(d, "arkiv.tar.gz")
+            arc.write_text("x")
+            self.assertEqual(unique_name(arc, "2026-11-22").name, "arkiv (2026-11-22).tar.gz")
+            Path(d, "arkiv (2026-11-22).tar.gz").write_text("y")
+            self.assertEqual(unique_name(arc, "2026-11-22").name, "arkiv (2026-11-22 2).tar.gz")
+            folder = Path(d, "min.mappe")
+            folder.mkdir()
+            self.assertEqual(unique_name(folder, "2026-11-22").name, "min.mappe (2026-11-22)")
+            self.assertEqual(unique_name(Path(d, ".bashrc"), "2026-11-22").name, ".bashrc (2026-11-22)")
+
+    def test_restore_single_twice(self):
+        from waypoint import restore
+
+        class FakeRepo:
+            def restore(self, snap_id, target, paths):
+                for p in paths:
+                    f = Path(target) / p.lstrip("/")
+                    f.parent.mkdir(parents=True, exist_ok=True)
+                    f.write_text("fra kopien")
+
+        with tempfile.TemporaryDirectory() as home, \
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": home + "/.st"}), \
+                mock.patch.object(restore, "HOME", Path(home)):
+            Path(home, "notat.txt").write_text("original")
+            snap = {"id": "s1", "time": "2026-11-22T10:00:00", "tags": ["home=" + home]}
+            first = restore.restore_single(FakeRepo(), snap, home + "/notat.txt")
+            second = restore.restore_single(FakeRepo(), snap, home + "/notat.txt")
+            self.assertEqual(first.name, "notat (2026-11-22).txt")
+            self.assertEqual(second.name, "notat (2026-11-22 2).txt")
+            self.assertEqual(Path(home, "notat.txt").read_text(), "original")
+            self.assertEqual(first.read_text(), "fra kopien")
+            self.assertEqual(second.read_text(), "fra kopien")
+
+
+class ExportSelfTests(unittest.TestCase):
+    """M4: en eksport til en mappe som selv tas med, skal ikke ta med seg selv eller tidligere eksporter."""
+
+    def test_export_into_included_folder(self):
+        with tempfile.TemporaryDirectory() as home:
+            docs = Path(home, "Dokumenter")
+            docs.mkdir()
+            Path(docs, "brev.txt").write_text("hei")
+            Path(docs, "waypoint-gammel.tar.gz").write_bytes(b"tidligere eksport")
+            Path(docs, "waypoint-avbrutt.tar.gz.part").write_bytes(b"halvskrevet")
+            Path(docs, ".waypoint-private-abc.gpg").write_bytes(b"rest")
+            code = f"""
+import sys, tarfile; sys.path.insert(0, {str(ROOT)!r})
+from pathlib import Path
+from waypoint import backup
+from waypoint.model import Section, Group, Item
+g = Group("files-personal", "x", items=[Item(id="Dokumenter", label="d",
+          data={{"path": "Dokumenter", "category": "personal"}})])
+dest = Path({str(docs)!r}) / "waypoint-ny.tar.gz"
+backup.write_backup([Section("F", "", [g])], dest)
+print("\\n".join(tarfile.open(dest).getnames()))
+"""
+            env = {**os.environ, "HOME": home, "XDG_CONFIG_HOME": home + "/.config", "XDG_STATE_HOME": home + "/.st"}
+            r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            names = r.stdout.split()
+            self.assertIn("home/Dokumenter/brev.txt", names)
+            for bad in ("waypoint-ny.tar.gz.part", "waypoint-ny.tar.gz", "waypoint-gammel.tar.gz",
+                        "waypoint-avbrutt.tar.gz.part", ".waypoint-private-abc.gpg"):
+                self.assertNotIn("home/Dokumenter/" + bad, names)
+
+
+class ExtractTests(unittest.TestCase):
+    """L2/L3: hardlenker bare til det som er lagt tilbake nå, og originalen tilbake når utpakkingen feiler."""
+
+    def _tar(self, members):
+        import io
+        import tarfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            for info, data in members:
+                t.addfile(info, io.BytesIO(data) if data is not None else None)
+        buf.seek(0)
+        return tarfile.open(fileobj=buf, mode="r|")
+
+    def _info(self, name, data=b"", link=None):
+        import tarfile
+        info = tarfile.TarInfo(name)
+        if link:
+            info.type, info.linkname = tarfile.LNKTYPE, link
+        else:
+            info.size = len(data)
+        return info
+
+    def test_hardlink_only_to_restored(self):
+        from waypoint import restore
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(restore, "HOME", Path(home)):
+            Path(home, "hemmelig").write_text("lå her fra før")
+            fake = mock.Mock(undo_dir=Path(home, "undo"))
+            tar = self._tar([(self._info("home/ok.txt", b"ny"), b"ny"),
+                             (self._info("home/lenke-ok", link="home/ok.txt"), None),
+                             (self._info("home/lenke-ut", link="home/hemmelig"), None)])
+            counts, logs = {"files": 0, "moved": 0}, []
+            restore.Restorer._extract(fake, tar, ["ok.txt", "lenke-ok", "lenke-ut"], counts, logs.append)
+            self.assertEqual(Path(home, "lenke-ok").read_text(), "ny")
+            self.assertFalse(Path(home, "lenke-ut").exists())
+            self.assertEqual(counts["files"], 2)
+
+    def test_original_put_back_on_failure(self):
+        import tarfile
+        from waypoint import restore
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(restore, "HOME", Path(home)):
+            Path(home, "fil.txt").write_text("original")
+            fake = mock.Mock(undo_dir=Path(home, "undo"))
+            tar = self._tar([(self._info("home/fil.txt", b"ny"), b"ny")])
+            counts, logs = {"files": 0, "moved": 0}, []
+            with mock.patch.object(tarfile.TarFile, "extract", side_effect=OSError("disk full")):
+                restore.Restorer._extract(fake, tar, ["fil.txt"], counts, logs.append)
+            self.assertEqual(Path(home, "fil.txt").read_text(), "original")
+            self.assertEqual(counts, {"files": 0, "moved": 0})
+
+
+class FlatpakRestoreTests(unittest.TestCase):
+    """Flatpak for hele systemet må kunne be polkit om passordet (ikke --noninteractive), og appene installeres
+    samlet per kilde, med én og én som reserve."""
+
+    def _run(self, fail_together):
+        from waypoint import restore
+        from waypoint.model import Group, Item, Section
+        apps = [Item(id=i, label=i, data={"id": i, "name": i, "origin": o, "installation": inst})
+                for i, o, inst in (("org.a.A", "flathub", "system"), ("org.b.B", "flathub", "system"),
+                                   ("org.c.C", "flathub", "user"))]
+        g = Group("flatpaks", "f", items=apps, data={"remotes": []})
+        calls = []
+
+        def stream(cmd, log):
+            calls.append(cmd)
+            together = len([c for c in cmd if c.startswith("org.")]) > 1
+            return (1 if (fail_together and together) else 0), []
+
+        fake = mock.Mock(s=[Section("A", "", [g])], _stream=stream)
+        with mock.patch.object(restore.system, "flatpak_remotes", return_value=[]):
+            ok, _text = restore.Restorer.do_flatpaks(fake, lambda t: None)
+        return ok, calls
+
+    def test_grouped_and_interactive(self):
+        ok, calls = self._run(False)
+        self.assertTrue(ok)
+        self.assertEqual(calls, [["flatpak", "install", "-y", "--system", "flathub", "org.a.A", "org.b.B"],
+                                 ["flatpak", "install", "-y", "--user", "flathub", "org.c.C"]])
+        self.assertFalse(any("--noninteractive" in c for c in calls))
+
+    def test_one_at_a_time_after_failure(self):
+        ok, calls = self._run(True)
+        self.assertTrue(ok)
+        self.assertEqual(calls[1:3], [["flatpak", "install", "-y", "--system", "flathub", "org.a.A"],
+                                      ["flatpak", "install", "-y", "--system", "flathub", "org.b.B"]])
+
+
+class HomePathTests(unittest.TestCase):
+    """Gjenoppretting til en annen hjemmemappe: bokmerker og standardmapper skal peke på den nye."""
+
+    def test_rewrite_home(self):
+        from waypoint.restore import rewrite_home
+        text = ("file:///home/ola/Nedlastinger\nfile:///home/ola/Mine%20filer Mine\n"
+                "favorite='/home/ola/x'\npath='/home/ola'\nannen=/home/olav/y\n")
+        out = rewrite_home(text, "/home/ola", "/home/kari")
+        self.assertIn("file:///home/kari/Nedlastinger", out)
+        self.assertIn("file:///home/kari/Mine%20filer Mine", out)
+        self.assertIn("favorite='/home/kari/x'", out)
+        self.assertIn("path='/home/kari'", out)
+        self.assertIn("annen=/home/olav/y", out)              # ikke en annen bruker med lignende navn
+        self.assertEqual(rewrite_home(text, "/home/ola", "/home/ola"), text)
+
+    def test_fix_home_paths(self):
+        from waypoint import restore
+        with tempfile.TemporaryDirectory() as home, mock.patch.object(restore, "HOME", Path(home)):
+            Path(home, ".config/gtk-3.0").mkdir(parents=True)
+            Path(home, ".config/gtk-3.0/bookmarks").write_text("file:///home/ola/Prosjekter Prosjekter\n")
+            Path(home, ".config/user-dirs.dirs").write_text(
+                'XDG_DOWNLOAD_DIR="$HOME/Downloads"\nXDG_DOCUMENTS_DIR="/home/ola/Documents"\n'
+                'XDG_DESKTOP_DIR="$HOME/"\nXDG_MUSIC_DIR="/etc"\n')
+            restore.fix_home_paths("/home/ola")
+            self.assertEqual(Path(home, ".config/gtk-3.0/bookmarks").read_text(),
+                             f"file://{home}/Prosjekter Prosjekter\n")
+            self.assertIn(f'XDG_DOCUMENTS_DIR="{home}/Documents"', Path(home, ".config/user-dirs.dirs").read_text())
+            self.assertTrue(Path(home, "Downloads").is_dir())
+            self.assertTrue(Path(home, "Documents").is_dir())
+
+
+class SizeLimitTests(unittest.TestCase):
+    """Maks størrelse: lageret behandles som fullt når grensen nås."""
+
+    def _repo(self, d, snaps):
+        """Falskt lager: hvert tidspunkt er en (glissen) fil på 1 GB i lagermappen."""
+        for sid, _t, _j in snaps:
+            with open(Path(d, sid), "wb") as f:
+                f.truncate(10**9)
+
+        class FakeRepo:
+            def location(self, mount=True):
+                return d
+
+            def snapshots(self, only_host=False):
+                return [{"id": sid, "time": t, "tags": ["waypoint", f"job={j}"]} for sid, t, j in snaps
+                        if Path(d, sid).exists()]
+
+            def forget_ids(self, ids, prune=True):
+                for i in ids:
+                    Path(d, i).unlink()
+        return FakeRepo()
+
+    def test_limit(self):
+        from waypoint import auto
+        self.assertIsNone(auto.size_limit({}))
+        self.assertIsNone(auto.size_limit({"max_size_gb": None}))
+        self.assertEqual(auto.size_limit({"max_size_gb": 1000}), 10**12)
+
+    def test_enforce_deletes_oldest_own_until_under(self):
+        from waypoint import auto
+        snaps = [("a1", "2026-01-01", "a"), ("b1", "2026-01-02", "b"), ("a2", "2026-02-01", "a"),
+                 ("a3", "2026-03-01", "a"), ("a4", "2026-04-01", "a")]
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(auto.settings, "deleted_job_ids", return_value=set()):
+            repo = self._repo(d, snaps)
+            size = auto.enforce_limit(repo, {"id": "a", "max_size_gb": 3}, lambda t: None)
+            self.assertEqual(size, 3 * 10**9)
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["a3", "a4", "b1"])  # b1: annen oppgave
+            # Med reserve for neste kopi slettes ett til, men aldri det nyeste
+            size = auto.enforce_limit(repo, {"id": "a", "max_size_gb": 3}, lambda t: None, reserve=10**9)
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["a4", "b1"])
+            auto.enforce_limit(repo, {"id": "a", "max_size_gb": 1}, lambda t: None)
+            self.assertEqual(sorted(p.name for p in Path(d).iterdir()), ["a4", "b1"])  # mer kan ikke slettes
+
+    def test_no_limit_deletes_nothing(self):
+        from waypoint import auto
+        with tempfile.TemporaryDirectory() as d:
+            repo = self._repo(d, [("a1", "2026-01-01", "a"), ("a2", "2026-02-01", "a")])
+            self.assertEqual(auto.enforce_limit(repo, {"id": "a"}, lambda t: None), 2 * 10**9)
+            self.assertEqual(len(list(Path(d).iterdir())), 2)
+
+
 class ResticPrepTests(unittest.TestCase):
     def test_exclude_patterns(self):
         from waypoint import backup
@@ -223,8 +522,10 @@ class ResticPrepTests(unittest.TestCase):
         # funn 6: navn som «Cache» og «lock» gjelder bare i programdata, aldri i personlige mapper
         for bare in ("Cache", "cache", "lock", "Crashpad", "cache2", "Logs"):
             self.assertNotIn(bare, pats)
+        exports = [p for p in pats if "waypoint-" in p or p.startswith("flytt-")]
+        self.assertIn("waypoint-*.tar.gz", exports)        # M4: eksportfiler tas ikke med
         self.assertTrue(all(p.startswith(home + "/.") for p in pats if p not in
-                            ("node_modules", home + "/Videoer/Opptak", "/mnt/disk \\[1\\]/Waypoint")))
+                            ("node_modules", home + "/Videoer/Opptak", "/mnt/disk \\[1\\]/Waypoint", *exports)))
 
     def test_prepare_snapshot_paths(self):
         code = f"""
@@ -448,6 +749,56 @@ print(sent)
         self.assertIsNone(privileged.URL.fullmatch("--root=/"))
         self.assertTrue(privileged.ALIAS.fullmatch("NVIDIA:repo-non-free"))
 
+    def test_valid_dnf_repo(self):  # H3: bare én signert kilde med kjente nøkler skrives som root
+        sys.path.insert(0, str(ROOT / "waypoint"))
+        import privileged
+        two = ("[a]\nname=A\nbaseurl=https://a.example/repo\n"
+               "[b]\nname=B\nbaseurl=https://b.example/repo\n")
+        nocheck = "[a]\nname=A\nbaseurl=https://a.example/repo\ngpgcheck=0\n"
+        norepocheck = "[a]\nname=A\nmetalink=https://a.example/ml\nrepo_gpgcheck=false\n"
+        nourl = "[a]\nname=A\ngpgcheck=1\n"
+        badurl = "[a]\nname=A\nbaseurl=file:///tmp/evil\n"
+        good = ("[copr:copr.example:u:p]\nname=Copr\nbaseurl=https://c.example/$releasever/\n"
+                "  https://mirror.example/$basearch/\ngpgcheck=1\ngpgkey=https://c.example/key.gpg\n"
+                "enabled=1\nsslverify=0\nexclude=kernel*\n")
+        for bad in (two, nocheck, norepocheck, nourl, badurl, "ikke en ini-fil", None):
+            self.assertIsNone(privileged.valid_dnf_repo(bad), bad)
+        clean = privileged.valid_dnf_repo(good)
+        self.assertEqual(clean, "[copr:copr.example:u:p]\nname=Copr\n"
+                                "baseurl=https://c.example/$releasever/ https://mirror.example/$basearch/\n"
+                                "gpgkey=https://c.example/key.gpg\nenabled=1\ngpgcheck=1\n")
+        self.assertNotIn("sslverify", clean)  # ukjente nøkler droppes
+
+
+class HelperTests2(unittest.TestCase):
+    """M1: pakker installeres bare med den root-eide hjelperen, aldri med en fil i hjemmemappen."""
+
+    def test_helper_problem(self):
+        from waypoint import restore
+        from waypoint.privileged import HELPER_VERSION
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d, "waypoint-privileged")
+            with mock.patch.dict(os.environ, {"WAYPOINT_HELPER": str(fake)}):
+                missing = restore.helper_problem()
+                self.assertIn("install.sh", missing)                           # mangler
+                fake.write_text(f"HELPER_VERSION = {HELPER_VERSION}\n")
+                self.assertEqual(restore.helper_version(fake), HELPER_VERSION)
+                self.assertIn("install.sh", restore.helper_problem())          # eid av brukeren, ikke root
+                root_stat = mock.Mock(st_uid=0)
+                with mock.patch.object(Path, "stat", return_value=root_stat):
+                    self.assertIsNone(restore.helper_problem())                # root-eid og oppdatert
+                    fake.write_text(f"HELPER_VERSION = {HELPER_VERSION - 1}\n")
+                    old = restore.helper_problem()                             # for gammel
+                    self.assertIn("install.sh", old)
+                    self.assertNotEqual(old, missing)
+
+    def test_install_restic_needs_helper(self):
+        from waypoint import repo
+        with mock.patch.dict(os.environ, {"WAYPOINT_HELPER": "/finnes/ikke"}), \
+                mock.patch.object(subprocess, "run") as run:
+            repo.install_restic(log=lambda t: None)
+            run.assert_not_called()   # ingen pkexec uten root-hjelperen
+
 
 class NetworkTests(unittest.TestCase):
     """NAS: serveradresser, visning og mappevalg (selve innloggingen krever en ekte NAS)."""
@@ -643,8 +994,30 @@ print(settings.password_in_use())
                  {"id": "gone", "time": "2026-03-01", "tags": ["waypoint", "job=deleted"]},
                  {"id": "b1", "time": "2026-04-01", "tags": ["waypoint", "job=b"]},
                  {"id": "a2", "time": "2026-05-01", "tags": ["waypoint", "job=a"]}]
-        ids = [s["id"] for s in auto.space_candidates(snaps, "a", {"a", "b"})]
+        ids = [s["id"] for s in auto.space_candidates(snaps, "a", {"deleted"})]
         self.assertEqual(ids, ["old", "a1", "gone"])  # aldri a2 (nyeste) eller b1 (en annen oppgave)
+
+    def test_space_candidates_never_unknown_jobs(self):  # M2: ukjente oppgaver slettes aldri automatisk
+        from waypoint import auto
+        snaps = [{"id": "foreign", "time": "2026-01-01", "tags": ["waypoint", "job=fra-gammel-installasjon"]},
+                 {"id": "gone", "time": "2026-02-01", "tags": ["waypoint", "job=deleted"]},
+                 {"id": "a1", "time": "2026-03-01", "tags": ["waypoint", "job=a"]},
+                 {"id": "a2", "time": "2026-04-01", "tags": ["waypoint", "job=a"]}]
+        ids = [s["id"] for s in auto.space_candidates(snaps, "a", {"deleted"})]
+        self.assertEqual(ids, ["gone", "a1"])
+        self.assertEqual([s["id"] for s in auto.space_candidates(snaps, "a", set())], ["a1"])
+
+    def test_deleted_jobs_remembered(self):  # M2
+        with tempfile.TemporaryDirectory() as home, \
+                mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": home + "/c", "XDG_STATE_HOME": home + "/s"}):
+            from waypoint import settings
+            settings.save_job({"id": "x1", "name": "x"})
+            settings.save_job({"id": "x2", "name": "y"})
+            self.assertEqual(settings.deleted_job_ids(), set())
+            settings.delete_job("x1")
+            settings.delete_job("x1")
+            self.assertEqual(settings.deleted_job_ids(), {"x1"})
+            self.assertEqual([j["id"] for j in settings.jobs()], ["x2"])
 
     def test_queue_cleared_only_when_nobody_runs(self):  # funn 5
         out = self._isolated("""
@@ -846,6 +1219,80 @@ class UpdaterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(updater.UpdateError):
                 updater.extract(self._tar(Path(d), "1.2.3", symlink), Path(d) / "x", "v1.2.3")
+
+
+class UpdateWhileBusyTests(unittest.TestCase):
+    """H1: oppdateringen skal ikke bytte ut koden mens en sikkerhetskopi kjører."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        home = self.tmp.name
+        self.env = mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": home + "/.config",
+                                                "XDG_STATE_HOME": home + "/.st"})
+        self.env.start()
+        from waypoint import settings
+        settings.save_job({"id": "j1", "name": "Test", "enabled": True, "interval": "daily", "preset": "files"})
+        settings.set("update_auto", True)
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def _maybe_update(self):
+        from waypoint import auto, updater
+        newer = {"tag": "v99.0.0", "version": "99.0.0", "name": "", "notes": "", "url": ""}
+        with mock.patch.object(updater, "fetch_latest", return_value=newer), \
+                mock.patch.object(updater, "is_installed", return_value=True), \
+                mock.patch.object(updater, "_install") as inst, \
+                mock.patch.object(updater, "restart_tray"), \
+                mock.patch.object(auto, "notify"), mock.patch.object(auto, "notify_once"):
+            result = updater.maybe_update(log=lambda t: None, force=True)
+        return result, inst
+
+    def test_not_while_job_running(self):
+        from waypoint import settings
+        settings.update_job_status("j1", state="running", pid=os.getpid(), boot=settings.boot_id())
+        result, inst = self._maybe_update()
+        inst.assert_not_called()
+        self.assertIsNone(result)
+
+    def test_not_while_lock_held_by_other_process(self):
+        import subprocess
+        from waypoint import settings, updater
+        settings.state_dir().mkdir(parents=True, exist_ok=True)
+        lock = settings.state_dir() / "auto.lock"
+        holder = subprocess.Popen([sys.executable, "-c",
+                                   "import fcntl, sys, time; f = open(sys.argv[1], 'w'); "
+                                   "fcntl.flock(f, fcntl.LOCK_EX); print('ok', flush=True); time.sleep(30)",
+                                   str(lock)], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "ok")
+            self.assertTrue(updater.busy())
+            result, inst = self._maybe_update()
+            inst.assert_not_called()
+            self.assertIsNone(result)
+            with mock.patch.object(updater, "is_installed", return_value=True), \
+                    mock.patch.object(updater, "_install") as inst2:
+                with self.assertRaises(updater.Busy):
+                    updater.install("v99.0.0")
+                inst2.assert_not_called()
+        finally:
+            holder.kill()
+            holder.wait()
+
+    def test_installs_when_idle_and_holds_lock(self):
+        from waypoint import updater
+        self.assertFalse(updater.busy())
+        seen = []
+        with mock.patch.object(updater, "is_installed", return_value=True), \
+                mock.patch.object(updater, "_install", side_effect=lambda *a: seen.append(updater.busy())):
+            updater.install("v99.0.0")
+        self.assertEqual(seen, [True])       # låsen holdes mens install.sh kjører
+        self.assertFalse(updater.busy())     # og slippes etterpå
+        result, inst = self._maybe_update()
+        inst.assert_called_once()
+        self.assertEqual(result, "v99.0.0")
 
 
 class TranslationTests(unittest.TestCase):
